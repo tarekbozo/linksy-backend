@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  createdAt    DateTime      @default(now())
+  passwordHash String
+  updatedAt    DateTime      @updatedAt
+  chats        ChatMessage[]
+  orders       Order[]
+  pass         Pass?
+  usageLogs    UsageLog[]
+}
+
+model WaitlistEntry {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  status    String   @default("PENDING") // PENDING | INVITED | ACTIVE (لاحقاً)
+  source    String?  // optional: landing, agent, referral...
+  locale    String?  // optional: ar, en
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Pass {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  plan       Plan     @default(FREE)
+  startsAt   DateTime @default(now())
+  endsAt     DateTime
+  tokenCap   Int      @default(0)
+  imageCap   Int      @default(0)
+  tokensUsed Int      @default(0)
+  imagesUsed Int      @default(0)
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String?
+  role      String
+  content   String
+  model     String?
+  createdAt DateTime @default(now())
+  tokens    Int      @default(0)
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+model Order {
+  id          String      @id @default(uuid())
+  userId      String
+  createdAt   DateTime    @default(now())
+  agentId     String?
+  amountSYP   Int
+  confirmedAt DateTime?
+  plan        Plan
+  updatedAt   DateTime    @updatedAt
+  status      OrderStatus @default(PENDING)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UsageLog {
+  id        String    @id @default(cuid())
+  userId    String
+  type      UsageType
+  model     String?
+  tokens    Int       @default(0)
+  images    Int       @default(0)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+  ELITE
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELED
+  EXPIRED
+}
+
+enum UsageType {
+  CHAT
+  IMAGE
+}
