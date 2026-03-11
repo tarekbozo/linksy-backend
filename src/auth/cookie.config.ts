@@ -13,7 +13,7 @@ export function buildAccessCookieOptions(): CookieOptions {
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: "lax",
+    sameSite: isProd ? "none" : "lax",
     path: "/",
     maxAge: 15 * 60 * 1000,
     domain: cookieDomain,
@@ -24,7 +24,7 @@ export function buildRefreshCookieOptions(): CookieOptions {
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: "lax",
+    sameSite: isProd ? "none" : "lax",
     path: authCookiePath,
     maxAge: 30 * 24 * 60 * 60 * 1000,
     domain: cookieDomain,
@@ -35,7 +35,7 @@ export function buildCsrfCookieOptions(): CookieOptions {
   return {
     httpOnly: false,
     secure: isProd,
-    sameSite: "strict",
+    sameSite: isProd ? "none" : "lax",
     path: "/",
     maxAge: 24 * 60 * 60 * 1000,
     domain: cookieDomain,
