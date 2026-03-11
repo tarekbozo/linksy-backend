@@ -1,0 +1,10 @@
+import type { CookieOptions, Response } from 'express';
+export declare const ACCESS_COOKIE_NAME = "access_token";
+export declare const REFRESH_COOKIE_NAME = "refresh_token";
+export declare const CSRF_COOKIE_NAME = "csrf_token";
+export declare const CSRF_HEADER_NAME = "x-csrf-token";
+export declare function buildAccessCookieOptions(): CookieOptions;
+export declare function buildRefreshCookieOptions(): CookieOptions;
+export declare function buildCsrfCookieOptions(): CookieOptions;
+export declare function setAuthCookies(res: Response, accessToken: string, refreshToken: string): void;
+export declare function clearAuthCookies(res: Response): void;

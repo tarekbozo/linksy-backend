@@ -1,0 +1,233 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  AGENT
+  USER
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+  ELITE
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELED
+  EXPIRED
+}
+
+enum UsageType {
+  CHAT
+  IMAGE
+}
+enum AiProvider {
+  ANTHROPIC
+  OPENAI
+  GEMINI
+}
+
+enum AuditAction {
+  MAGIC_LINK_REQUESTED
+  MAGIC_LINK_VERIFIED
+  OAUTH_LOGIN
+  LOGOUT
+  LOGOUT_ALL_SESSIONS
+  SESSION_REVOKED
+  TOKEN_REFRESHED
+  ACCOUNT_LINKED
+  ACCOUNT_CREATED
+  EMAIL_CHANGED
+  PASS_ACTIVATED
+  PASS_CREATED
+  ORDER_CONFIRMED
+  ROLE_CHANGED
+  USER_DEACTIVATED
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  role         Role      @default(USER)
+  isActive     Boolean   @default(true)
+  onboarded    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  accounts     Account[]
+  magicTokens  MagicToken[]
+  sessions     Session[]
+
+  conversations Conversation[]
+  chats        ChatMessage[]
+  orders       Order[]
+  pass         Pass?
+  usageLogs    UsageLog[]
+  auditLogs    AuditLog[] @relation("UserAuditLogs")
+  actorLogs    AuditLog[] @relation("ActorAuditLogs")
+  agentOrders  Order[]    @relation("AgentOrders")
+  generatedImages GeneratedImage[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model MagicToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, expiresAt])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  userAgent  String?
+  ipAddress  String?
+  revokedAt  DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model Account {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider          String
+  providerAccountId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model WaitlistEntry {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  status    String   @default("PENDING")
+  source    String?
+  locale    String?
+  referredBy   String?
+  referralCode String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Pass {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  plan       Plan     @default(FREE)
+  startsAt   DateTime @default(now())
+  endsAt     DateTime
+  tokenCap   Int      @default(0)
+  imageCap   Int      @default(0)
+  tokensUsed Int      @default(0)
+  imagesUsed Int      @default(0)
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Conversation {
+  id        String        @id @default(cuid())
+  userId    String
+  title     String        @default("New conversation")
+  provider  AiProvider    @default(ANTHROPIC)
+  model     String        @default("claude-haiku-4-5-20251001")
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+
+  @@index([userId, updatedAt])
+}
+
+model ChatMessage {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String?
+  role           String       
+  content        String
+  model          String?
+  tokens         Int          @default(0)
+  createdAt      DateTime     @default(now())
+  user           User?        @relation(fields: [userId], references: [id])
+
+  @@index([conversationId, createdAt])
+}
+
+model Order {
+  id          String      @id @default(uuid())
+  userId      String
+  createdAt   DateTime    @default(now())
+  agentId     String?
+  amountSYP   Int
+  confirmedAt DateTime?
+  plan        Plan
+  updatedAt   DateTime    @updatedAt
+  status      OrderStatus @default(PENDING)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent       User?       @relation("AgentOrders", fields: [agentId], references: [id])
+
+  @@index([userId])
+  @@index([agentId])
+  @@index([status])
+}
+
+model GeneratedImage {
+  id        String   @id @default(cuid())
+  userId    String
+  prompt    String
+  model     String   @default("imagen-4.0-generate-001")
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UsageLog {
+  id        String    @id @default(cuid())
+  userId    String
+  type      UsageType
+  model     String?
+  tokens    Int       @default(0)
+  images    Int       @default(0)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  userId    String?
+  user      User?       @relation("UserAuditLogs", fields: [userId], references: [id])
+  actorId   String?
+  actor     User?       @relation("ActorAuditLogs", fields: [actorId], references: [id])
+  action    AuditAction
+  metadata  Json?
+  createdAt DateTime    @default(now())
+
+  @@index([userId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+}
