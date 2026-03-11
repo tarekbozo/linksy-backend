@@ -18,7 +18,8 @@ export class CsrfMiddleware implements NestMiddleware {
 
     if (
       req.path.includes("/callback") ||
-      req.path.endsWith("/auth/magic/verify")
+      req.path.endsWith("/auth/magic/verify") ||
+      req.path.endsWith("/waitlist/join")
     ) {
       return next();
     }
