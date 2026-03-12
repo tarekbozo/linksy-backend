@@ -20,7 +20,7 @@ export const PLAN_CONFIG: Record<
   FREE: {
     amountSYP: 0,
     durationDays: 30,
-    tokenCap: 0,
+    tokenCap: 3000,
     imageCap: 0,
     dailyTokenCap: 3000,
   },
