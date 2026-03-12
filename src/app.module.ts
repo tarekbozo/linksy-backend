@@ -30,8 +30,8 @@ import { ContactController } from "./contact/contact.controller";
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot({
       throttlers: [
-        { name: "default", ttl: 60_000, limit: 60 },
-        { name: "strict", ttl: 60_000, limit: 10 },
+        { name: "default", ttl: 60_000, limit: 300 },
+        { name: "strict", ttl: 60_000, limit: 100 },
       ],
     }),
     PrismaModule,

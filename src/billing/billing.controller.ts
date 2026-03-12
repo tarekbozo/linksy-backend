@@ -47,7 +47,7 @@ export class BillingController {
   getOrder(@Param("id") id: string) {
     return this.billing.getOrderById(id);
   }
-
+  @SkipThrottle()
   @Get("activity")
   getActivity(@CurrentUser() user: AuthUser, @Query("take") take = "10") {
     return this.billing.getActivity(user.id, +take);
