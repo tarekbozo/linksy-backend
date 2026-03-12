@@ -157,25 +157,25 @@ export class BillingService {
       const endsAt = addDays(now, cfg.durationDays);
 
       const pass = await this.prisma.pass.upsert({
-        where: { userId },
-        create: {
-          userId,
-          plan: Plan.FREE,
-          startsAt: now,
-          endsAt,
-          tokenCap: 0,
-          imageCap: 0,
-        },
-        update: {
-          plan: Plan.FREE,
-          startsAt: now,
-          endsAt,
-          tokenCap: 0,
-          imageCap: 0,
-          tokensUsed: 0,
-          imagesUsed: 0,
-        },
-      });
+      where: { userId },
+      create: {
+        userId,
+        plan: Plan.FREE,
+        startsAt: now,
+        endsAt,
+        tokenCap: cfg.tokenCap,
+        imageCap: cfg.imageCap,
+      },
+      update: {
+        plan: Plan.FREE,
+        startsAt: now,
+        endsAt,
+        tokenCap: cfg.tokenCap,
+        imageCap: cfg.imageCap,
+        tokensUsed: 0,
+        imagesUsed: 0,
+      },
+    });
 
       await this.prisma.user.update({
         where: { id: userId },
