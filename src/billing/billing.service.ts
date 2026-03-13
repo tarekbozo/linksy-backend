@@ -88,6 +88,7 @@ export class BillingService {
     }
 
     const tokenCapExceeded =
+      pass.plan !== Plan.FREE &&
       pass.tokenCap > 0 && pass.tokensUsed >= pass.tokenCap;
     const imageCapExceeded =
       pass.imageCap > 0 && pass.imagesUsed >= pass.imageCap;
@@ -351,14 +352,14 @@ export class BillingService {
     }
 
     if (pass.plan === Plan.FREE) {
-      const cap = PLAN_CONFIG.FREE.dailyTokenCap ?? 2000;
+      const cap = PLAN_CONFIG.FREE.dailyTokenCap ?? 3000;
       const dayStart = startOfDayUTC(now);
       const agg = await this.prisma.usageLog.aggregate({
         where: { userId, type: UsageType.CHAT, createdAt: { gte: dayStart } },
         _sum: { tokens: true },
       });
       const used = agg._sum.tokens ?? 0;
-      if (used + tokens > cap) {
+      if (used >= cap) {
         return {
           allowed: false,
           reason: "DAILY_LIMIT",
@@ -367,7 +368,7 @@ export class BillingService {
       }
     }
 
-    if (pass.tokenCap > 0 && pass.tokensUsed + tokens > pass.tokenCap) {
+    if (pass.tokenCap > 0 && pass.tokensUsed >= pass.tokenCap) {
       return {
         allowed: false,
         reason: "TOKEN_CAP",
