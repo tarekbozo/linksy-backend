@@ -17,6 +17,7 @@ import {
   waitlistEmailHtml,
   waitlistEmailText,
 } from "src/waitlist/waitlist-email.template";
+import { waitlistLaunchEmailHtml } from "src/waitlist/waitlist-launch-email.template";
 
 @Injectable()
 export class EmailService {
@@ -75,6 +76,32 @@ export class EmailService {
     `,
     });
   }
+
+  async sendBroadcast(toEmail: string, subject: string, html: string): Promise<void> {
+  const { error } = await this.resend.emails.send({
+    from: this.from(),
+    to: [toEmail],
+    subject,
+    html,
+  });
+  if (error) {
+    this.logger.error(`Broadcast failed for ${toEmail}`, error);
+  }
+}
+
+  async sendWaitlistLaunch(toEmail: string, refCode: string): Promise<void> {
+  const { error } = await this.resend.emails.send({
+    from: this.from(),
+    to: [toEmail],
+    subject: "🚀 العد التنازلي بدأ — أنت من أوائل المسجلين في LinkSy",
+    html: waitlistLaunchEmailHtml(refCode),
+  });
+ 
+  if (error) {
+    this.logger.error(`Failed to send launch email to ${toEmail}`, error);
+  }
+}
+ 
   async sendMagicLink(toEmail: string, link: string) {
     const { error } = await this.resend.emails.send({
       from: this.from(),
