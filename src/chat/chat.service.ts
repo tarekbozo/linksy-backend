@@ -25,37 +25,29 @@ export const MODEL_OPTIONS = {
     { id: "claude-haiku-4-5-20251001", label: "Claude Haiku (Fast)" },
     { id: "claude-sonnet-4-5-20251029", label: "Claude Sonnet (Smart)" },
   ],
-  OPENAI: [
+ OPENAI: [
     { id: "gpt-4.1-nano", label: "GPT-4.1 Nano (Fast)" },
-    { id: "gpt-4.1-mini", label: "GPT-4.1 Mini (Smart)" },
+    { id: "gpt-4.1-mini", label: "GPT-4.1 Mini (Fast)" },
+    { id: "gpt-4o", label: "GPT-4o (Smart)" },       
+    { id: "gpt-4o-mini", label: "GPT-4o Mini (Fast)" },
   ],
   GEMINI: [{ id: "gemini-2.5-flash", label: "Gemini Flash (Fast)" }],
+};
+
+// ── Plan-based max output tokens ─────────────────────────────────────────────
+const MAX_TOKENS_BY_PLAN: Record<string, number> = {
+  FREE: 1024,
+  STARTER: 2048,
+  PRO: 4096,
+  ELITE: 8192,
 };
 
 // ── Supported file types ──────────────────────────────────────────────────────
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const CODE_EXTS = [
-  ".js",
-  ".ts",
-  ".py",
-  ".java",
-  ".c",
-  ".cpp",
-  ".cs",
-  ".go",
-  ".rs",
-  ".php",
-  ".rb",
-  ".swift",
-  ".kt",
-  ".html",
-  ".css",
-  ".json",
-  ".yaml",
-  ".yml",
-  ".xml",
-  ".sh",
-  ".sql",
+  ".js", ".ts", ".py", ".java", ".c", ".cpp", ".cs", ".go", ".rs",
+  ".php", ".rb", ".swift", ".kt", ".html", ".css", ".json", ".yaml",
+  ".yml", ".xml", ".sh", ".sql",
 ];
 
 export interface AttachedFile {
@@ -120,11 +112,9 @@ export class ChatService {
       return result.value;
     }
 
-    // plain text, markdown, code files
     return buffer.toString("utf-8");
   }
 
-  /** Text content with file context prepended — used by OpenAI & Gemini */
   private async buildTextContent(
     userMessage: string,
     file?: AttachedFile,
@@ -144,7 +134,6 @@ export class ChatService {
     return `${context}\n\n${userMessage || "Please analyse this file."}`;
   }
 
-  /** Rich Anthropic content — supports native image blocks */
   private async buildAnthropicContent(
     userMessage: string,
     file?: AttachedFile,
@@ -263,13 +252,18 @@ export class ChatService {
     });
     if (!conv) throw new NotFoundException("Conversation not found");
 
+    // 2b. Get user plan for max_tokens
+    const pass = await this.prisma.pass.findUnique({ where: { userId } });
+    const userPlan = pass?.plan ?? "FREE";
+    const maxTokens = MAX_TOKENS_BY_PLAN[userPlan] ?? 1024;
+
     // 3. Save user message
     const savedContent = file ? `[${file.name}]\n${userMessage}` : userMessage;
     await this.prisma.chatMessage.create({
       data: { conversationId, userId, role: "user", content: savedContent },
     });
 
-    // 4. Build plain-text history (shared across all providers)
+    // 4. Build plain-text history
     const history: { role: "user" | "assistant"; content: string }[] =
       conv.messages.map((m) => ({
         role: m.role as "user" | "assistant",
@@ -299,7 +293,7 @@ export class ChatService {
 
         const stream = await this.anthropic.messages.stream({
           model: conv.model,
-          max_tokens: 2048,
+          max_tokens: maxTokens,
           system: this.SYSTEM,
           messages: [
             ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -320,18 +314,20 @@ export class ChatService {
         const final = await stream.finalMessage();
         totalTokens = final.usage.input_tokens + final.usage.output_tokens;
 
-        // ── OPENAI ─────────────────────────────────────────────────────────
+      // ── OPENAI ─────────────────────────────────────────────────────────
       } else if (conv.provider === "OPENAI") {
         const textContent = await this.buildTextContent(userMessage, file);
 
         const stream = await this.openai.chat.completions.create({
           model: conv.model,
+          max_tokens: maxTokens,
           messages: [
             { role: "system", content: this.SYSTEM },
             ...history,
             { role: "user", content: textContent },
           ],
           stream: true,
+          stream_options: { include_usage: true },
         });
 
         for await (const chunk of stream) {
@@ -340,21 +336,27 @@ export class ChatService {
             fullText += text;
             send({ type: "delta", text });
           }
+          // Capture real usage if available
+          if (chunk.usage) {
+            totalTokens = chunk.usage.prompt_tokens + chunk.usage.completion_tokens;
+          }
         }
 
-        // OpenAI streaming doesn't return usage — estimate from char count
-        totalTokens = Math.ceil((userMessage.length + fullText.length) / 4);
+        // Fallback estimate if usage not returned
+        if (!totalTokens) {
+          totalTokens = Math.ceil((userMessage.length + fullText.length) / 4);
+        }
 
-        // ── GEMINI ─────────────────────────────────────────────────────────
+      // ── GEMINI ─────────────────────────────────────────────────────────
       } else if (conv.provider === "GEMINI") {
         const textContent = await this.buildTextContent(userMessage, file);
 
         const geminiModel = this.gemini!.getGenerativeModel({
           model: conv.model,
           systemInstruction: this.SYSTEM,
+          generationConfig: { maxOutputTokens: maxTokens },
         });
 
-        // Gemini uses 'model' role instead of 'assistant'
         const geminiHistory = history.map((m) => ({
           role: m.role === "assistant" ? "model" : "user",
           parts: [{ text: m.content }],
