@@ -23,7 +23,7 @@ export type AiProvider = "ANTHROPIC" | "OPENAI" | "GEMINI";
 export const MODEL_OPTIONS = {
   ANTHROPIC: [
     { id: "claude-haiku-4-5-20251001", label: "Claude Haiku (Fast)" },
-    { id: "claude-sonnet-4-5-20251029", label: "Claude Sonnet (Smart)" },
+    { id: "claude-sonnet-4-6", label: "Claude Sonnet (Smart)" },
   ],
  OPENAI: [
     { id: "gpt-4.1-nano", label: "GPT-4.1 Nano (Fast)" },
