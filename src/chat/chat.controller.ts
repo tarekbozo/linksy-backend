@@ -10,8 +10,9 @@ import {
   Res,
 } from "@nestjs/common";
 import { Response } from "express";
-import { AttachedFile, ChatService, MODEL_OPTIONS } from "./chat.service";
+import { ChatService, MODEL_OPTIONS } from "./chat.service";
 import { AuthUser, CurrentUser } from "src/auth/decorators";
+import { StreamMessageDto } from "./dto/stream-message.dto";
 
 @Controller("chat")
 export class ChatController {
@@ -62,13 +63,16 @@ export class ChatController {
   async stream(
     @CurrentUser() user: AuthUser,
     @Param("id") id: string,
-    @Body()
-    body: {
-      message: string;
-      file?: AttachedFile; // { name, mimeType, base64 }
-    },
+    @Body() body: StreamMessageDto,
     @Res() res: Response,
   ) {
-    await this.chat.streamChat(user.id, id, body.message, res, body.file);
+    await this.chat.streamChat(
+      user.id,
+      id,
+      body.message,
+      res,
+      body.file,
+      body.modelId,
+    );
   }
 }

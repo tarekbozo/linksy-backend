@@ -25,14 +25,27 @@ export const MODEL_OPTIONS = {
     { id: "claude-haiku-4-5-20251001", label: "Claude Haiku (Fast)" },
     { id: "claude-sonnet-4-6", label: "Claude Sonnet (Smart)" },
   ],
- OPENAI: [
+  OPENAI: [
     { id: "gpt-4.1-nano", label: "GPT-4.1 Nano (Fast)" },
     { id: "gpt-4.1-mini", label: "GPT-4.1 Mini (Fast)" },
-    { id: "gpt-4o", label: "GPT-4o (Smart)" },       
+    { id: "gpt-4o", label: "GPT-4o (Smart)" },
     { id: "gpt-4o-mini", label: "GPT-4o Mini (Fast)" },
   ],
   GEMINI: [{ id: "gemini-2.5-flash", label: "Gemini Flash (Fast)" }],
 };
+
+// ── Resolve provider from model ID ────────────────────────────────────────────
+function resolveProvider(modelId: string): AiProvider {
+  for (const [provider, models] of Object.entries(MODEL_OPTIONS)) {
+    if (models.some((m) => m.id === modelId)) {
+      return provider as AiProvider;
+    }
+  }
+  // fallback: infer from model id prefix
+  if (modelId.startsWith("claude")) return "ANTHROPIC";
+  if (modelId.startsWith("gpt") || modelId.startsWith("o1")) return "OPENAI";
+  return "GEMINI";
+}
 
 // ── Plan-based max output tokens ─────────────────────────────────────────────
 const MAX_TOKENS_BY_PLAN: Record<string, number> = {
@@ -45,9 +58,27 @@ const MAX_TOKENS_BY_PLAN: Record<string, number> = {
 // ── Supported file types ──────────────────────────────────────────────────────
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const CODE_EXTS = [
-  ".js", ".ts", ".py", ".java", ".c", ".cpp", ".cs", ".go", ".rs",
-  ".php", ".rb", ".swift", ".kt", ".html", ".css", ".json", ".yaml",
-  ".yml", ".xml", ".sh", ".sql",
+  ".js",
+  ".ts",
+  ".py",
+  ".java",
+  ".c",
+  ".cpp",
+  ".cs",
+  ".go",
+  ".rs",
+  ".php",
+  ".rb",
+  ".swift",
+  ".kt",
+  ".html",
+  ".css",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".xml",
+  ".sh",
+  ".sql",
 ];
 
 export interface AttachedFile {
@@ -68,7 +99,9 @@ export class ChatService {
     "You are not Claude, GPT, or Gemini. " +
     'If asked who made you, what model you are, or who you are, say: "I am LinkSy AI, powered by the best AI models, built by the LinkSy platform." Do not mention Anthropic, Google, or OpenAI. ' +
     "You can help with anything — writing, translation, coding, studying, design, and more. " +
-    "Be helpful, friendly, and concise. Respond in the same language the user writes in.";
+    "You are fully capable of reading and analyzing files, images, documents, and code that users upload — always attempt to process them. " +
+    "Be helpful, friendly, and concise. Respond in the same language the user writes in. " +
+    "If you are unable to help with a request due to your current limitations, always let the user know they can try switching to a different model using the model selector at the bottom of the chat — a different model may be able to assist them better.";
 
   constructor(
     private readonly prisma: PrismaService,
@@ -240,6 +273,7 @@ export class ChatService {
     userMessage: string,
     res: Response,
     file?: AttachedFile,
+    modelId?: string, // optional per-request model override from frontend
   ) {
     // 1. Check quota
     const canUse = await this.billing.canConsume(userId, UsageType.CHAT, 1);
@@ -257,6 +291,14 @@ export class ChatService {
     const userPlan = pass?.plan ?? "FREE";
     const maxTokens = MAX_TOKENS_BY_PLAN[userPlan] ?? 1024;
 
+    // 2c. Resolve which model + provider to actually use.
+    //     If the frontend sent a modelId, use that. Otherwise fall back to
+    //     whatever the conversation was created with.
+    const activeModelId = modelId ?? conv.model;
+    const activeProvider = modelId
+      ? resolveProvider(modelId)
+      : (conv.provider as AiProvider);
+
     // 3. Save user message
     const savedContent = file ? `[${file.name}]\n${userMessage}` : userMessage;
     await this.prisma.chatMessage.create({
@@ -272,27 +314,32 @@ export class ChatService {
 
     // 5. SSE headers
     res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
+    res.setHeader("Transfer-Encoding", "chunked");
     res.flushHeaders();
 
-    const send = (data: object) =>
+    const send = (data: object) => {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
+      // Force flush after every write — prevents Express compression middleware
+      // from buffering SSE chunks and sending them all at once (causes browser freeze)
+      if (typeof (res as any).flush === "function") (res as any).flush();
+    };
 
     let fullText = "";
     let totalTokens = 0;
 
     try {
       // ── ANTHROPIC ──────────────────────────────────────────────────────
-      if (conv.provider === "ANTHROPIC") {
+      if (activeProvider === "ANTHROPIC") {
         const latestContent = await this.buildAnthropicContent(
           userMessage,
           file,
         );
 
-        const stream = await this.anthropic.messages.stream({
-          model: conv.model,
+        const stream = this.anthropic.messages.stream({
+          model: activeModelId,
           max_tokens: maxTokens,
           system: this.SYSTEM,
           messages: [
@@ -301,25 +348,30 @@ export class ChatService {
           ],
         });
 
-        for await (const chunk of stream) {
-          if (
-            chunk.type === "content_block_delta" &&
-            chunk.delta.type === "text_delta"
-          ) {
-            fullText += chunk.delta.text;
-            send({ type: "delta", text: chunk.delta.text });
-          }
-        }
+        stream.on("text", (text) => {
+          fullText += text;
+          send({ type: "delta", text });
+        });
+
+        stream.on("error", (err) => {
+          this.logger.error("Anthropic stream error", err);
+        });
+
+        stream.on("finalMessage", (msg) => {
+          this.logger.log(
+            `Anthropic done, tokens: ${msg.usage.input_tokens + msg.usage.output_tokens}`,
+          );
+        });
 
         const final = await stream.finalMessage();
         totalTokens = final.usage.input_tokens + final.usage.output_tokens;
 
-      // ── OPENAI ─────────────────────────────────────────────────────────
-      } else if (conv.provider === "OPENAI") {
+        // ── OPENAI ─────────────────────────────────────────────────────────
+      } else if (activeProvider === "OPENAI") {
         const textContent = await this.buildTextContent(userMessage, file);
 
         const stream = await this.openai.chat.completions.create({
-          model: conv.model,
+          model: activeModelId,
           max_tokens: maxTokens,
           messages: [
             { role: "system", content: this.SYSTEM },
@@ -336,23 +388,22 @@ export class ChatService {
             fullText += text;
             send({ type: "delta", text });
           }
-          // Capture real usage if available
           if (chunk.usage) {
-            totalTokens = chunk.usage.prompt_tokens + chunk.usage.completion_tokens;
+            totalTokens =
+              chunk.usage.prompt_tokens + chunk.usage.completion_tokens;
           }
         }
 
-        // Fallback estimate if usage not returned
         if (!totalTokens) {
           totalTokens = Math.ceil((userMessage.length + fullText.length) / 4);
         }
 
-      // ── GEMINI ─────────────────────────────────────────────────────────
-      } else if (conv.provider === "GEMINI") {
+        // ── GEMINI ─────────────────────────────────────────────────────────
+      } else if (activeProvider === "GEMINI") {
         const textContent = await this.buildTextContent(userMessage, file);
 
         const geminiModel = this.gemini!.getGenerativeModel({
-          model: conv.model,
+          model: activeModelId,
           systemInstruction: this.SYSTEM,
           generationConfig: { maxOutputTokens: maxTokens },
         });
@@ -387,7 +438,7 @@ export class ChatService {
             userId,
             role: "assistant",
             content: fullText,
-            model: conv.model,
+            model: activeModelId,
             tokens: totalTokens,
           },
         }),
@@ -414,7 +465,7 @@ export class ChatService {
         UsageType.CHAT,
         totalTokens,
         0,
-        conv.model,
+        activeModelId,
       );
 
       send({ type: "done", tokens: totalTokens });
