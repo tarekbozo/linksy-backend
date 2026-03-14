@@ -166,7 +166,7 @@ export class AuthService {
     if (existingUser) {
       if (!existingUser.isActive)
         throw new ForbiddenException("Account deactivated.");
-      if (!input.emailVerified) {
+      if (!input.emailVerified && input.provider !== "github") {
         throw new ForbiddenException(
           "Provider email must be verified before linking to an existing account.",
         );
