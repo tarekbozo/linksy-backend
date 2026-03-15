@@ -43,7 +43,7 @@ export function waitlistGoLiveEmailHtml(refCode: string): string {
                     <p style="color:#818cf8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">🎁 هدية قائمة الانتظار</p>
                     <p style="color:#ffffff;font-size:18px;font-weight:900;margin:0 0 4px;">خصم 15% على أول شهر</p>
                     <p style="color:#94a3b8;font-size:13px;margin:0;">أذكر هذا الكود عند التواصل مع الوكيل:</p>
-                    <p style="color:#a5b4fc;font-size:20px;font-weight:900;letter-spacing:0.15em;margin:8px 0 0;font-family:monospace;">${refCode}</p>
+                    <p style="color:#a5b4fc;font-size:20px;font-weight:900;letter-spacing:0.15em;margin:8px 0 0;font-family:monospace;">LAUNCH16</p>
                   </td>
                 </tr>
               </table>

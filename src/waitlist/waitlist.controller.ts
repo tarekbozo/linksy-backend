@@ -73,9 +73,8 @@ export class WaitlistController {
     let failed = 0;
 
     for (const entry of entries) {
-      const refCode = `WAIT15-${entry.id.slice(0, 6).toUpperCase()}`;
       try {
-        await this.email.sendGoLive(entry.email, refCode);
+        await this.email.sendGoLive(entry.email, "LAUNCH16");
         sent++;
         await new Promise((r) => setTimeout(r, 200));
       } catch {
