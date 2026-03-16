@@ -85,6 +85,23 @@ export class WaitlistController {
     return { sent, failed, total: entries.length };
   }
 
+  @Post("resend-failed")
+  @Roles(Role.ADMIN)
+  async resendFailed(@Body() dto: { emails: string[] }) {
+    let sent = 0;
+    let failed = 0;
+    for (const email of dto.emails) {
+      try {
+        await this.email.sendGoLive(email, "LAUNCH15");
+        sent++;
+        await new Promise((r) => setTimeout(r, 600));
+      } catch {
+        failed++;
+      }
+    }
+    return { sent, failed };
+  }
+
   @Post("broadcast")
   @Roles(Role.ADMIN)
   async broadcast(@Body() dto: { subject: string; html: string }) {
