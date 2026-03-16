@@ -89,7 +89,8 @@ export class BillingService {
 
     const tokenCapExceeded =
       pass.plan !== Plan.FREE &&
-      pass.tokenCap > 0 && pass.tokensUsed >= pass.tokenCap;
+      pass.tokenCap > 0 &&
+      pass.tokensUsed >= pass.tokenCap;
     const imageCapExceeded =
       pass.imageCap > 0 && pass.imagesUsed >= pass.imageCap;
 
@@ -158,25 +159,25 @@ export class BillingService {
       const endsAt = addDays(now, cfg.durationDays);
 
       const pass = await this.prisma.pass.upsert({
-      where: { userId },
-      create: {
-        userId,
-        plan: Plan.FREE,
-        startsAt: now,
-        endsAt,
-        tokenCap: cfg.tokenCap,
-        imageCap: cfg.imageCap,
-      },
-      update: {
-        plan: Plan.FREE,
-        startsAt: now,
-        endsAt,
-        tokenCap: cfg.tokenCap,
-        imageCap: cfg.imageCap,
-        tokensUsed: 0,
-        imagesUsed: 0,
-      },
-    });
+        where: { userId },
+        create: {
+          userId,
+          plan: Plan.FREE,
+          startsAt: now,
+          endsAt,
+          tokenCap: cfg.tokenCap,
+          imageCap: cfg.imageCap,
+        },
+        update: {
+          plan: Plan.FREE,
+          startsAt: now,
+          endsAt,
+          tokenCap: cfg.tokenCap,
+          imageCap: cfg.imageCap,
+          tokensUsed: 0,
+          imagesUsed: 0,
+        },
+      });
 
       await this.prisma.user.update({
         where: { id: userId },
@@ -359,7 +360,8 @@ export class BillingService {
         _sum: { tokens: true },
       });
       const used = agg._sum.tokens ?? 0;
-      if (used >= cap) {
+      const remaining = cap - used;
+      if (used >= cap || remaining < 100) {
         return {
           allowed: false,
           reason: "DAILY_LIMIT",

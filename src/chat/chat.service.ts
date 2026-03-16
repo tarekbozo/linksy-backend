@@ -290,6 +290,31 @@ export class ChatService {
     const pass = await this.prisma.pass.findUnique({ where: { userId } });
     const userPlan = pass?.plan ?? "FREE";
     const maxTokens = MAX_TOKENS_BY_PLAN[userPlan] ?? 1024;
+    // For FREE plan, also check daily remaining and use whichever is smaller
+    let effectiveMaxTokens = maxTokens;
+    if (userPlan === "FREE") {
+      const dayStart = new Date(
+        Date.UTC(
+          new Date().getUTCFullYear(),
+          new Date().getUTCMonth(),
+          new Date().getUTCDate(),
+        ),
+      );
+
+      const dailyAgg = await this.prisma.usageLog.aggregate({
+        where: { userId, type: UsageType.CHAT, createdAt: { gte: dayStart } },
+        _sum: { tokens: true },
+      });
+      const usedToday = dailyAgg._sum.tokens ?? 0;
+      const remainingToday = Math.max(0, 3000 - usedToday);
+      effectiveMaxTokens = Math.min(maxTokens, remainingToday);
+
+      if (effectiveMaxTokens < 50) {
+        throw new ForbiddenException(
+          "You've used today's 3,000 tokens. Upgrade your plan to continue.",
+        );
+      }
+    }
 
     // 2c. Resolve which model + provider to actually use.
     //     If the frontend sent a modelId, use that. Otherwise fall back to
@@ -340,7 +365,7 @@ export class ChatService {
 
         const stream = this.anthropic.messages.stream({
           model: activeModelId,
-          max_tokens: maxTokens,
+          max_tokens: effectiveMaxTokens,
           system: this.SYSTEM,
           messages: [
             ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -372,7 +397,7 @@ export class ChatService {
 
         const stream = await this.openai.chat.completions.create({
           model: activeModelId,
-          max_tokens: maxTokens,
+          max_tokens: effectiveMaxTokens,
           messages: [
             { role: "system", content: this.SYSTEM },
             ...history,
@@ -405,7 +430,10 @@ export class ChatService {
         const geminiModel = this.gemini!.getGenerativeModel({
           model: activeModelId,
           systemInstruction: this.SYSTEM,
-          generationConfig: { maxOutputTokens: maxTokens },
+          generationConfig: {
+            maxOutputTokens: effectiveMaxTokens,
+            ...(userPlan === "FREE" && { temperature: 1.0 }),
+          },
         });
 
         const geminiHistory = history.map((m) => ({
@@ -460,10 +488,15 @@ export class ChatService {
       }
 
       // 8. Consume tokens from billing
+      // Cap logged tokens to effectiveMaxTokens to prevent overage billing
+      const billableTokens =
+        userPlan === "FREE"
+          ? Math.min(totalTokens, effectiveMaxTokens)
+          : totalTokens;
       await this.billing.consume(
         userId,
         UsageType.CHAT,
-        totalTokens,
+        billableTokens,
         0,
         activeModelId,
       );
