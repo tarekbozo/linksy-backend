@@ -2,134 +2,420 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
-  NotFoundException,
   Logger,
+  NotFoundException,
 } from "@nestjs/common";
-import { AuditAction, OrderStatus, Plan, UsageType } from "@prisma/client";
+import {
+  ActionType,
+  AuditAction,
+  CreditType,
+  OrderStatus,
+  Plan,
+  TransactionType,
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
-import { PLAN_CONFIG, PAID_PLANS } from "./billing.plans";
-import { EmailService } from "src/email/email.service";
-
-function startOfDayUTC(d = new Date()) {
-  return new Date(
-    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
-  );
-}
-
-function addDays(d: Date, days: number) {
-  return new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
-}
+import { EmailService } from "../email/email.service";
+import {
+  PLAN_CONFIG,
+  CREDIT_COST,
+  PAID_PLANS,
+  BASIC_MODELS,
+} from "./billing.plans";
 
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly email: EmailService,
   ) {}
 
+  // ── Plans ──────────────────────────────────────────────────────────────────
+
   listPlans() {
-    return Object.entries(PLAN_CONFIG).map(([plan, cfg]) => ({
-      plan,
-      ...cfg,
-    }));
+    return Object.entries(PLAN_CONFIG).map(([plan, cfg]) => ({ plan, ...cfg }));
   }
 
-  async getMyPass(userId: string) {
-    return this.prisma.pass.findUnique({ where: { userId } });
-  }
+  // ── Balance ────────────────────────────────────────────────────────────────
 
-  /**
-   * Returns a status object that the frontend can use to show reminders
-   * like: "You've used today's 2,000 tokens. Upgrade your plan."
-   */
-  async getUsageStatus(userId: string) {
-    const pass = await this.prisma.pass.findUnique({ where: { userId } });
-    if (!pass) {
-      return {
-        hasPass: false,
-        plan: null,
-        onboarded: false,
-        upgradeRequired: true,
-        message: "No active pass. Please select a plan.",
-      };
-    }
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { onboarded: true },
+  async getBalance(userId: string): Promise<number> {
+    const sub = await this.prisma.userSubscription.findUnique({
+      where: { userId },
     });
 
-    const now = new Date();
-    const expired = pass.endsAt.getTime() <= now.getTime();
-
-    // Daily cap only for FREE.
-    let daily = null as null | { cap: number; used: number; remaining: number };
-    if (pass.plan === Plan.FREE) {
-      const cap = PLAN_CONFIG.FREE.dailyTokenCap ?? 3000;
-      const dayStart = startOfDayUTC(now);
-      const agg = await this.prisma.usageLog.aggregate({
-        where: {
-          userId,
-          type: UsageType.CHAT,
-          createdAt: { gte: dayStart },
-        },
-        _sum: { tokens: true },
-      });
-
-      const used = agg._sum.tokens ?? 0;
-      daily = {
-        cap,
-        used,
-        remaining: Math.max(0, cap - used),
-      };
+    if (!sub || sub.plan === Plan.FREE) {
+      const free = await this.ensureFreeDailyCredit(userId);
+      return Math.max(0, free.dailyCap - free.usedToday);
     }
 
-    const tokenCapExceeded =
-      pass.plan !== Plan.FREE &&
-      pass.tokenCap > 0 &&
-      pass.tokensUsed >= pass.tokenCap;
-    const imageCapExceeded =
-      pass.imageCap > 0 && pass.imagesUsed >= pass.imageCap;
+    const now = new Date();
+    const buckets = await this.prisma.userCredit.findMany({
+      where: {
+        userId,
+        remaining: { gt: 0 },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+    });
 
-    const blocked =
-      expired ||
-      tokenCapExceeded ||
-      imageCapExceeded ||
-      (daily ? daily.remaining <= 0 : false);
+    return buckets.reduce((sum, b) => sum + b.remaining, 0);
+  }
 
-    const message = expired
-      ? "Your pass expired. Please upgrade your plan."
-      : daily && daily.remaining <= 0
-        ? `You’ve used today’s ${daily.cap.toLocaleString()} tokens. Upgrade your plan to continue.`
-        : tokenCapExceeded
-          ? "You reached your token cap. Upgrade your plan to continue."
-          : imageCapExceeded
-            ? "You reached your image cap. Upgrade your plan to continue."
-            : "ok";
+  async getStatus(userId: string) {
+    const sub = await this.prisma.userSubscription.findUnique({
+      where: { userId },
+    });
+    const plan = sub?.plan ?? Plan.FREE;
+    const balance = await this.getBalance(userId);
+    const cfg = PLAN_CONFIG[plan];
 
     return {
-      hasPass: true,
-      onboarded: !!user?.onboarded,
-      plan: pass.plan,
-      passEndsAt: pass.endsAt,
-      daily,
-      tokenCap: pass.tokenCap,
-      tokensUsed: pass.tokensUsed,
-      imageCap: pass.imageCap,
-      imagesUsed: pass.imagesUsed,
-      upgradeRequired: blocked,
-      message,
+      plan,
+      balance,
+      features: cfg.features,
+      expiresAt: sub?.expiresAt ?? null,
+      upgradeRequired: balance <= 0,
     };
   }
 
-  /**
-   * Selects a plan.
-   * - FREE: activates immediately but only ONCE per email/user.
-   * - Paid: creates a PENDING order; activation happens on confirm.
-   */
+  // ── Free daily credit helpers ──────────────────────────────────────────────
+
+  private async ensureFreeDailyCredit(userId: string) {
+    const now = new Date();
+    const todayUTC = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    );
+
+    let record = await this.prisma.freeDailyCredit.findUnique({
+      where: { userId },
+    });
+
+    if (!record) {
+      record = await this.prisma.freeDailyCredit.create({
+        data: { userId, lastResetAt: todayUTC, usedToday: 0, dailyCap: 10 },
+      });
+    } else if (record.lastResetAt < todayUTC) {
+      record = await this.prisma.freeDailyCredit.update({
+        where: { userId },
+        data: { lastResetAt: todayUTC, usedToday: 0 },
+      });
+    }
+
+    return record;
+  }
+
+  // ── canConsume ─────────────────────────────────────────────────────────────
+
+  async canConsume(userId: string, action: ActionType, modelId?: string) {
+    const cost = this.resolveCost(action, modelId);
+    const sub = await this.prisma.userSubscription.findUnique({
+      where: { userId },
+    });
+    const plan = sub?.plan ?? Plan.FREE;
+    const cfg = PLAN_CONFIG[plan];
+
+    // ── Feature gates ────────────────────────────────────────────────────────
+
+    if (
+      action === ActionType.VOICE_GENERATION &&
+      !cfg.features.includes("voice_to_text")
+    ) {
+      return {
+        allowed: false,
+        reason: "FEATURE_LOCKED",
+        message: "تحويل الصوت إلى نص متاح من باقة الطالب فأعلى.",
+        cost,
+      };
+    }
+
+    if (
+      action === ActionType.IMAGE_GENERATION &&
+      !cfg.features.includes("image_generation")
+    ) {
+      return {
+        allowed: false,
+        reason: "FEATURE_LOCKED",
+        message: "توليد الصور يتطلب باقة المستقل أو المبدع.",
+        cost,
+      };
+    }
+
+    if (
+      action === ActionType.ADVANCED_CHAT &&
+      !cfg.features.includes("advanced_chat")
+    ) {
+      return {
+        allowed: false,
+        reason: "FEATURE_LOCKED",
+        message: "المحادثة المتقدمة تتطلب باقة الطالب أو أعلى.",
+        cost,
+      };
+    }
+
+    // ── Freelancer monthly image cap (30/month, Creator = unlimited) ─────────
+
+    if (
+      action === ActionType.IMAGE_GENERATION &&
+      cfg.monthlyImageCap > 0 // -1 = unlimited, 0 = no access, >0 = capped
+    ) {
+      const startOfMonth = new Date();
+      startOfMonth.setUTCDate(1);
+      startOfMonth.setUTCHours(0, 0, 0, 0);
+
+      const imagesThisMonth = await this.prisma.usageLog.count({
+        where: {
+          userId,
+          type: "IMAGE" as any,
+          createdAt: { gte: startOfMonth },
+        },
+      });
+
+      if (imagesThisMonth >= cfg.monthlyImageCap) {
+        return {
+          allowed: false,
+          reason: "IMAGE_CAP",
+          message: `وصلت للحد الشهري (${cfg.monthlyImageCap} صورة). قم بالترقية إلى باقة المبدع للحصول على صور غير محدودة.`,
+          cost,
+        };
+      }
+    }
+
+    // ── FREE daily limit ─────────────────────────────────────────────────────
+
+    if (plan === Plan.FREE) {
+      const free = await this.ensureFreeDailyCredit(userId);
+      const remaining = free.dailyCap - free.usedToday;
+      if (remaining < cost) {
+        return {
+          allowed: false,
+          reason: "DAILY_LIMIT",
+          message: `استهلكت رصيد اليوم المجاني (${free.dailyCap} رصيد). قم بالترقية للمتابعة.`,
+          cost,
+        };
+      }
+      return { allowed: true, reason: null, message: "ok", cost };
+    }
+
+    // ── Subscription expiry ──────────────────────────────────────────────────
+
+    if (sub?.expiresAt && sub.expiresAt < new Date()) {
+      return {
+        allowed: false,
+        reason: "EXPIRED",
+        message: "انتهت صلاحية باقتك. يرجى التجديد.",
+        cost,
+      };
+    }
+
+    // ── Credit balance ───────────────────────────────────────────────────────
+
+    const balance = await this.getBalance(userId);
+    if (balance < cost) {
+      return {
+        allowed: false,
+        reason: "NO_CREDITS",
+        message: "رصيدك غير كافٍ. قم بشراء شحن إضافي أو ترقية باقتك.",
+        cost,
+      };
+    }
+
+    return { allowed: true, reason: null, message: "ok", cost };
+  }
+
+  // ── consume ────────────────────────────────────────────────────────────────
+
+  async consume(
+    userId: string,
+    action: ActionType,
+    modelId?: string,
+    conversationId?: string,
+  ) {
+    const check = await this.canConsume(userId, action, modelId);
+    if (!check.allowed) throw new ForbiddenException(check.message);
+
+    const cost = check.cost;
+    const sub = await this.prisma.userSubscription.findUnique({
+      where: { userId },
+    });
+    const plan = sub?.plan ?? Plan.FREE;
+
+    if (plan === Plan.FREE) {
+      await this.prisma.freeDailyCredit.update({
+        where: { userId },
+        data: { usedToday: { increment: cost } },
+      });
+
+      const newBalance = await this.getBalance(userId);
+      await this.prisma.creditTransaction.create({
+        data: {
+          userId,
+          type: TransactionType.DEBIT,
+          action,
+          amount: cost,
+          balanceAfter: newBalance,
+          conversationId: conversationId ?? null,
+          metadata: { model: modelId, plan: "FREE" },
+        },
+      });
+
+      await this.prisma.usageLog.create({
+        data: { userId, type: "CHAT", model: modelId, credits: cost },
+      });
+
+      return { ok: true, cost, balanceAfter: newBalance };
+    }
+
+    // Paid: deduct from buckets — SUBSCRIPTION first, then TOPUP by expiresAt ASC
+    const now = new Date();
+    const buckets = await this.prisma.userCredit.findMany({
+      where: {
+        userId,
+        remaining: { gt: 0 },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      orderBy: [{ type: "asc" }, { expiresAt: "asc" }],
+    });
+
+    let remaining = cost;
+    const updates: Promise<any>[] = [];
+
+    for (const bucket of buckets) {
+      if (remaining <= 0) break;
+      const deduct = Math.min(bucket.remaining, remaining);
+      remaining -= deduct;
+      updates.push(
+        this.prisma.userCredit.update({
+          where: { id: bucket.id },
+          data: { remaining: { decrement: deduct } },
+        }),
+      );
+    }
+
+    await Promise.all(updates);
+
+    const newBalance = await this.getBalance(userId);
+
+    await this.prisma.creditTransaction.create({
+      data: {
+        userId,
+        type: TransactionType.DEBIT,
+        action,
+        amount: cost,
+        balanceAfter: newBalance,
+        conversationId: conversationId ?? null,
+        metadata: { model: modelId, plan },
+      },
+    });
+
+    const usageType =
+      action === ActionType.IMAGE_GENERATION
+        ? "IMAGE"
+        : action === ActionType.VOICE_GENERATION
+          ? "VOICE"
+          : "CHAT";
+
+    await this.prisma.usageLog.create({
+      data: { userId, type: usageType as any, model: modelId, credits: cost },
+    });
+
+    return { ok: true, cost, balanceAfter: newBalance };
+  }
+
+  // ── deductFixed ───────────────────────────────────────────────────────────
+  // Deducts a pre-calculated fixed amount. Used by Study Mode so the chat
+  // stream can be called afterwards without double-billing.
+
+  async deductFixed(
+    userId: string,
+    credits: number,
+    action: ActionType,
+    metadata?: Record<string, unknown>,
+  ): Promise<{ creditsDeducted: number; creditsRemaining: number }> {
+    const balance = await this.getBalance(userId);
+    if (balance < credits) {
+      throw new BadRequestException("رصيد غير كافٍ لتنفيذ هذه العملية");
+    }
+
+    const sub = await this.prisma.userSubscription.findUnique({
+      where: { userId },
+    });
+    const plan = sub?.plan ?? Plan.FREE;
+
+    if (plan === Plan.FREE) {
+      await this.prisma.freeDailyCredit.update({
+        where: { userId },
+        data: { usedToday: { increment: credits } },
+      });
+    } else {
+      const now = new Date();
+      const buckets = await this.prisma.userCredit.findMany({
+        where: {
+          userId,
+          remaining: { gt: 0 },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        },
+        orderBy: [{ type: "asc" }, { expiresAt: "asc" }],
+      });
+
+      let remaining = credits;
+      const updates: Promise<any>[] = [];
+      for (const bucket of buckets) {
+        if (remaining <= 0) break;
+        const deduct = Math.min(bucket.remaining, remaining);
+        remaining -= deduct;
+        updates.push(
+          this.prisma.userCredit.update({
+            where: { id: bucket.id },
+            data: { remaining: { decrement: deduct } },
+          }),
+        );
+      }
+      await Promise.all(updates);
+    }
+
+    const newBalance = await this.getBalance(userId);
+
+    await this.prisma.creditTransaction.create({
+      data: {
+        userId,
+        type: TransactionType.DEBIT,
+        action,
+        amount: credits,
+        balanceAfter: newBalance,
+        metadata: { ...metadata, plan },
+      },
+    });
+
+    await this.prisma.usageLog.create({
+      data: { userId, type: "CHAT", credits },
+    });
+
+    return { creditsDeducted: credits, creditsRemaining: newBalance };
+  }
+
+  // ── resolveCost ────────────────────────────────────────────────────────────
+
+  resolveCost(action: ActionType, modelId?: string): number {
+    if (action === ActionType.BASIC_CHAT) return CREDIT_COST.BASIC_CHAT;
+    if (action === ActionType.ADVANCED_CHAT) return CREDIT_COST.ADVANCED_CHAT;
+    if (action === ActionType.IMAGE_GENERATION)
+      return CREDIT_COST.IMAGE_GENERATION;
+    if (action === ActionType.VOICE_GENERATION)
+      return CREDIT_COST.VOICE_GENERATION;
+    if (action === ActionType.VIDEO_GENERATION)
+      return CREDIT_COST.VIDEO_GENERATION;
+    return 1;
+  }
+
+  resolveAction(modelId: string): ActionType {
+    if (BASIC_MODELS.includes(modelId)) return ActionType.BASIC_CHAT;
+    return ActionType.ADVANCED_CHAT;
+  }
+
+  // ── selectPlan ────────────────────────────────────────────────────────────
+
   async selectPlan(userId: string, plan: Plan) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException("User not found");
@@ -138,71 +424,36 @@ export class BillingService {
     if (!cfg) throw new BadRequestException("Unknown plan");
 
     if (plan === Plan.FREE) {
-      // One-time FREE per email/user.
-      // Since email is unique per user, this blocks "same email forever free".
-      // New emails are a different user and cannot be perfectly prevented without additional verification.
-      const alreadyHadFree = await this.prisma.auditLog.findFirst({
-        where: {
-          userId,
-          action: AuditAction.PASS_ACTIVATED,
-          metadata: { path: ["plan"], equals: "FREE" },
-        },
+      // Prevent downgrade from paid plan
+      const existing = await this.prisma.userSubscription.findUnique({
+        where: { userId },
       });
-
-      if (alreadyHadFree) {
+      if (existing && existing.plan !== Plan.FREE) {
         throw new ForbiddenException(
-          "Free plan can only be claimed once per email.",
+          "لا يمكن التحويل إلى الباقة المجانية وأنت على باقة مدفوعة",
         );
       }
-
-      const now = new Date();
-      const endsAt = addDays(now, cfg.durationDays);
-
-      const pass = await this.prisma.pass.upsert({
+      await this.ensureFreeDailyCredit(userId);
+      await this.prisma.userSubscription.upsert({
         where: { userId },
-        create: {
-          userId,
-          plan: Plan.FREE,
-          startsAt: now,
-          endsAt,
-          tokenCap: cfg.tokenCap,
-          imageCap: cfg.imageCap,
-        },
-        update: {
-          plan: Plan.FREE,
-          startsAt: now,
-          endsAt,
-          tokenCap: cfg.tokenCap,
-          imageCap: cfg.imageCap,
-          tokensUsed: 0,
-          imagesUsed: 0,
-        },
+        create: { userId, plan: Plan.FREE },
+        update: { plan: Plan.FREE, expiresAt: null, activatedAt: null },
       });
-
       await this.prisma.user.update({
         where: { id: userId },
         data: { onboarded: true },
       });
-
-      await this.audit.log({
-        userId,
-        action: AuditAction.PASS_ACTIVATED,
-        metadata: { plan: "FREE", endsAt: endsAt.toISOString() },
-      });
-
-      return { mode: "activated" as const, pass };
+      return { mode: "activated" as const };
     }
 
-    if (!PAID_PLANS.includes(plan)) {
-      throw new BadRequestException("Invalid paid plan");
-    }
+    if (!PAID_PLANS.includes(plan))
+      throw new BadRequestException("Invalid plan");
 
-    // Create a pending order. Activation happens on confirm.
     const order = await this.prisma.order.create({
       data: {
         userId,
         plan,
-        amountSYP: cfg.amountSYP,
+        priceSYP: cfg.priceSYP,
         status: OrderStatus.PENDING,
       },
     });
@@ -210,27 +461,196 @@ export class BillingService {
     await this.audit.log({
       userId,
       action: AuditAction.PASS_CREATED,
-      metadata: { plan, orderId: order.id, amountSYP: cfg.amountSYP },
+      metadata: { plan, orderId: order.id, priceSYP: cfg.priceSYP },
     });
 
     return { mode: "order" as const, order };
   }
+
+  // ── purchaseTopUp ─────────────────────────────────────────────────────────
+
+  async purchaseTopUp(userId: string, topUpPackId: string) {
+    const pack = await this.prisma.topUpPack.findUnique({
+      where: { id: topUpPackId },
+    });
+    if (!pack || !pack.active)
+      throw new NotFoundException("Top-up pack not found");
+
+    const order = await this.prisma.order.create({
+      data: {
+        userId,
+        topUpPackId,
+        priceSYP: pack.priceSYP,
+        status: OrderStatus.PENDING,
+      },
+    });
+
+    return { mode: "order" as const, order };
+  }
+
+  // ── confirmOrder ──────────────────────────────────────────────────────────
+
+  async confirmOrder(actorId: string, orderId: string, reference?: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { user: { select: { email: true } }, topUpPack: true },
+    });
+    if (!order) throw new NotFoundException("Order not found");
+    if (order.status !== OrderStatus.PENDING)
+      throw new BadRequestException("Order is not pending");
+
+    const now = new Date();
+
+    if (order.plan) {
+      const cfg = PLAN_CONFIG[order.plan];
+      const expiresAt = new Date(
+        now.getTime() + cfg.durationDays * 24 * 60 * 60 * 1000,
+      );
+
+      await this.prisma.$transaction([
+        this.prisma.order.update({
+          where: { id: orderId },
+          data: {
+            status: OrderStatus.CONFIRMED,
+            confirmedAt: now,
+            confirmedBy: actorId,
+          },
+        }),
+        this.prisma.userSubscription.upsert({
+          where: { userId: order.userId },
+          create: {
+            userId: order.userId,
+            plan: order.plan,
+            activatedAt: now,
+            expiresAt,
+          },
+          update: { plan: order.plan, activatedAt: now, expiresAt },
+        }),
+        this.prisma.userCredit.create({
+          data: {
+            userId: order.userId,
+            type: CreditType.SUBSCRIPTION,
+            amount: cfg.credits,
+            remaining: cfg.credits,
+            expiresAt,
+          },
+        }),
+        this.prisma.user.update({
+          where: { id: order.userId },
+          data: { onboarded: true },
+        }),
+      ]);
+
+      await this.audit.log({
+        userId: order.userId,
+        actorId,
+        action: AuditAction.PLAN_ACTIVATED,
+        metadata: { plan: order.plan, orderId, expiresAt, reference },
+      });
+
+      this.email
+        .sendPassActivated(order.user.email, order.plan, expiresAt)
+        .catch((err) => this.logger.error("Activation email failed", err));
+
+      return { ok: true, type: "plan", plan: order.plan };
+    }
+
+    if (order.topUpPackId && order.topUpPack) {
+      const pack = order.topUpPack;
+      const expiresAt = new Date(
+        now.getTime() + pack.validDays * 24 * 60 * 60 * 1000,
+      );
+
+      await this.prisma.$transaction([
+        this.prisma.order.update({
+          where: { id: orderId },
+          data: {
+            status: OrderStatus.CONFIRMED,
+            confirmedAt: now,
+            confirmedBy: actorId,
+          },
+        }),
+        this.prisma.userCredit.create({
+          data: {
+            userId: order.userId,
+            type: CreditType.TOPUP,
+            amount: pack.credits,
+            remaining: pack.credits,
+            expiresAt,
+          },
+        }),
+      ]);
+
+      await this.audit.log({
+        userId: order.userId,
+        actorId,
+        action: AuditAction.TOPUP_PURCHASED,
+        metadata: {
+          packId: pack.id,
+          credits: pack.credits,
+          orderId,
+          reference,
+        },
+      });
+
+      return { ok: true, type: "topup", credits: pack.credits };
+    }
+
+    throw new BadRequestException("Order has neither plan nor top-up pack");
+  }
+
+  // ── rejectOrder ───────────────────────────────────────────────────────────
+
+  async rejectOrder(actorId: string, orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) throw new NotFoundException("Order not found");
+    if (order.status !== OrderStatus.PENDING)
+      throw new BadRequestException("Order is not pending");
+
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        status: OrderStatus.REJECTED,
+        confirmedAt: new Date(),
+        confirmedBy: actorId,
+      },
+    });
+
+    await this.audit.log({
+      userId: order.userId,
+      actorId,
+      action: AuditAction.ORDER_REJECTED,
+      metadata: { orderId },
+    });
+
+    return { ok: true };
+  }
+
+  // ── getOrderById ──────────────────────────────────────────────────────────
+
   async getOrderById(orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
         user: { select: { id: true, email: true } },
-        agent: { select: { id: true, email: true } },
+        topUpPack: true,
       },
     });
-    if (!order) throw new NotFoundException("Order not found.");
+    if (!order) throw new NotFoundException("Order not found");
     return order;
   }
 
-  /**
-   * Get recent usage activity for a user — used by dashboard overview.
-   */
-  async getActivity(userId: string, take = 10) {
+  // ── listTopUpPacks ────────────────────────────────────────────────────────
+
+  async listTopUpPacks() {
+    return this.prisma.topUpPack.findMany({ where: { active: true } });
+  }
+
+  // ── getActivity ───────────────────────────────────────────────────────────
+
+  async getActivity(userId: string, take = 50) {
     return this.prisma.usageLog.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
@@ -239,191 +659,9 @@ export class BillingService {
         id: true,
         type: true,
         model: true,
-        tokens: true,
-        images: true,
+        credits: true,
         createdAt: true,
       },
     });
-  }
-
-  /**
-   * Confirms an order and activates the pass.
-   * Intended for AGENT/ADMIN workflows.
-   */
-  async confirmOrder(actorId: string, orderId: string, reference?: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      include: { user: { select: { email: true } } }, // ← include user email
-    });
-    if (!order) throw new NotFoundException("Order not found");
-
-    if (order.status !== OrderStatus.PENDING) {
-      throw new BadRequestException("Order is not pending");
-    }
-
-    const cfg = PLAN_CONFIG[order.plan];
-    if (!cfg) throw new BadRequestException("Unknown plan");
-
-    const now = new Date();
-    const endsAt = addDays(now, cfg.durationDays);
-
-    const [updatedOrder, pass] = await this.prisma.$transaction([
-      this.prisma.order.update({
-        where: { id: orderId },
-        data: {
-          status: OrderStatus.PAID,
-          confirmedAt: now,
-          agentId: actorId,
-          updatedAt: now,
-        },
-      }),
-      this.prisma.pass.upsert({
-        where: { userId: order.userId },
-        create: {
-          userId: order.userId,
-          plan: order.plan,
-          startsAt: now,
-          endsAt,
-          tokenCap: cfg.tokenCap,
-          imageCap: cfg.imageCap,
-        },
-        update: {
-          plan: order.plan,
-          startsAt: now,
-          endsAt,
-          tokenCap: cfg.tokenCap,
-          imageCap: cfg.imageCap,
-          tokensUsed: 0,
-          imagesUsed: 0,
-        },
-      }),
-      this.prisma.user.update({
-        where: { id: order.userId },
-        data: { onboarded: true },
-      }),
-    ]);
-
-    await this.audit.log({
-      userId: order.userId,
-      actorId,
-      action: AuditAction.ORDER_CONFIRMED,
-      metadata: {
-        orderId,
-        plan: order.plan,
-        amountSYP: cfg.amountSYP,
-        reference,
-      },
-    });
-
-    await this.audit.log({
-      userId: order.userId,
-      actorId,
-      action: AuditAction.PASS_ACTIVATED,
-      metadata: { plan: order.plan, endsAt: endsAt.toISOString() },
-    });
-
-    // ── Send activation email — fire and forget, never blocks ──
-    this.email
-      .sendPassActivated(order.user.email, order.plan, endsAt)
-      .catch((err) => this.logger.error("Pass activation email failed", err));
-
-    return { order: updatedOrder, pass };
-  }
-  /**
-   * Checks if a user can spend tokens/images right now.
-   */
-  async canConsume(
-    userId: string,
-    type: UsageType,
-    tokens: number,
-    images = 0,
-  ) {
-    const pass = await this.prisma.pass.findUnique({ where: { userId } });
-    if (!pass) {
-      return { allowed: false, reason: "NO_PASS", message: "No active plan." };
-    }
-
-    const now = new Date();
-    if (pass.endsAt.getTime() <= now.getTime()) {
-      return {
-        allowed: false,
-        reason: "EXPIRED",
-        message: "Your plan expired. Please upgrade.",
-      };
-    }
-
-    if (pass.plan === Plan.FREE) {
-      const cap = PLAN_CONFIG.FREE.dailyTokenCap ?? 3000;
-      const dayStart = startOfDayUTC(now);
-      const agg = await this.prisma.usageLog.aggregate({
-        where: { userId, type: UsageType.CHAT, createdAt: { gte: dayStart } },
-        _sum: { tokens: true },
-      });
-      const used = agg._sum.tokens ?? 0;
-      const remaining = cap - used;
-      if (used >= cap || remaining < 100) {
-        return {
-          allowed: false,
-          reason: "DAILY_LIMIT",
-          message: `You’ve used today’s ${cap.toLocaleString()} tokens. Upgrade your plan to continue.`,
-        };
-      }
-    }
-
-    if (pass.tokenCap > 0 && pass.tokensUsed >= pass.tokenCap) {
-      return {
-        allowed: false,
-        reason: "TOKEN_CAP",
-        message: "Token cap reached. Upgrade your plan.",
-      };
-    }
-
-    if (pass.imageCap > 0 && pass.imagesUsed + images > pass.imageCap) {
-      return {
-        allowed: false,
-        reason: "IMAGE_CAP",
-        message: "Image cap reached. Upgrade your plan.",
-      };
-    }
-
-    return { allowed: true, reason: null, message: "ok" };
-  }
-
-  /**
-   * Records usage and increments counters.
-   * Call this after a successful response.
-   */
-  async consume(
-    userId: string,
-    type: UsageType,
-    tokens: number,
-    images = 0,
-    model?: string,
-  ) {
-    const check = await this.canConsume(userId, type, tokens, images);
-    if (!check.allowed) {
-      throw new ForbiddenException(check.message);
-    }
-
-    await this.prisma.$transaction([
-      this.prisma.usageLog.create({
-        data: {
-          userId,
-          type,
-          model,
-          tokens,
-          images,
-        },
-      }),
-      this.prisma.pass.update({
-        where: { userId },
-        data: {
-          tokensUsed: { increment: tokens },
-          imagesUsed: { increment: images },
-        },
-      }),
-    ]);
-
-    return { ok: true };
   }
 }

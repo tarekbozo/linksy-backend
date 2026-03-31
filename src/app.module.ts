@@ -24,6 +24,8 @@ import { GlobalExceptionFilter } from "./common/filters/global-exception.filter"
 import { CsrfMiddleware } from "./common/middleware/csrf.middleware";
 import { ImageModule } from "./image/image.module";
 import { ContactController } from "./contact/contact.controller";
+import { VoiceModule } from "./voice/voice.module";
+import { StudyModule } from "./study/study.module";
 
 @Module({
   imports: [
@@ -44,6 +46,8 @@ import { ContactController } from "./contact/contact.controller";
     AgentsModule,
     WaitlistModule,
     ImageModule,
+    VoiceModule,
+    StudyModule,
   ],
   controllers: [HealthController, MeController, ContactController],
   providers: [

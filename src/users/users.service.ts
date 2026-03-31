@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { AuditAction, Role } from "@prisma/client";
+import { AuditAction, OrderStatus, Role } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 
@@ -39,7 +39,7 @@ export class UsersService {
           isActive: true,
           onboarded: true,
           createdAt: true,
-          pass: { select: { plan: true, endsAt: true } },
+          subscription: { select: { plan: true, expiresAt: true } },
         },
       }),
       this.prisma.user.count({ where }),
@@ -59,7 +59,11 @@ export class UsersService {
         isActive: true,
         onboarded: true,
         createdAt: true,
-        pass: true,
+        subscription: true,
+        creditBuckets: {
+          where: { remaining: { gt: 0 } },
+          orderBy: { expiresAt: "asc" },
+        },
         orders: {
           orderBy: { createdAt: "desc" },
           take: 10,
@@ -123,7 +127,7 @@ export class UsersService {
     return user;
   }
 
-  // ─── Agent: get order by ID to confirm ──────────────────────────────────
+  // ─── Agent: get order by ID ──────────────────────────────────────────────
   async getOrderById(orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -133,11 +137,14 @@ export class UsersService {
     return order;
   }
 
-  // ─── Agent: get pending orders + their own confirmed orders ─────────────
+  // ─── Agent: get pending orders + own confirmed orders ───────────────────
   async getAgentOrders(agentId: string) {
     return this.prisma.order.findMany({
       where: {
-        OR: [{ agentId, status: "PAID" }, { status: "PENDING" }],
+        OR: [
+          { confirmedBy: agentId, status: OrderStatus.CONFIRMED },
+          { status: OrderStatus.PENDING },
+        ],
       },
       include: { user: { select: { id: true, email: true } } },
       orderBy: { createdAt: "desc" },
@@ -148,18 +155,20 @@ export class UsersService {
   // ─── Agent: stats ────────────────────────────────────────────────────────
   async getAgentStats(agentId: string) {
     const [confirmed, pending, totalSYP] = await Promise.all([
-      this.prisma.order.count({ where: { agentId, status: "PAID" } }),
-      this.prisma.order.count({ where: { status: "PENDING" } }),
+      this.prisma.order.count({
+        where: { confirmedBy: agentId, status: OrderStatus.CONFIRMED },
+      }),
+      this.prisma.order.count({ where: { status: OrderStatus.PENDING } }),
       this.prisma.order.aggregate({
-        where: { agentId, status: "PAID" },
-        _sum: { amountSYP: true },
+        where: { confirmedBy: agentId, status: OrderStatus.CONFIRMED },
+        _sum: { priceSYP: true },
       }),
     ]);
 
     return {
       confirmedOrders: confirmed,
       pendingOrders: pending,
-      totalCollectedSYP: totalSYP._sum.amountSYP ?? 0,
+      totalCollectedSYP: totalSYP._sum?.priceSYP ?? 0,
     };
   }
 }

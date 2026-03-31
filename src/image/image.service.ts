@@ -1,10 +1,11 @@
-// src/image/image.service.ts
 import {
   Injectable,
   ForbiddenException,
   BadRequestException,
 } from "@nestjs/common";
+import { ActionType } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { BillingService } from "../billing/billing.service";
 import { ConfigService } from "@nestjs/config";
 import { GoogleGenAI } from "@google/genai";
 
@@ -14,6 +15,7 @@ export class ImageService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly billing: BillingService,
     private readonly config: ConfigService,
   ) {
     this.ai = new GoogleGenAI({
@@ -30,35 +32,14 @@ export class ImageService {
   ) {
     if (!prompt?.trim()) throw new BadRequestException("Prompt is required");
 
-    // ── 1. Load pass ──────────────────────────────────────────────────────
-    const pass = await this.prisma.pass.findUnique({ where: { userId } });
+    // 1. Check credits + feature gate
+    const canUse = await this.billing.canConsume(
+      userId,
+      ActionType.IMAGE_GENERATION,
+    );
+    if (!canUse.allowed) throw new ForbiddenException(canUse.message);
 
-    if (!pass) {
-      throw new ForbiddenException("No active pass found");
-    }
-
-    // ── 2. Check plan allows images ───────────────────────────────────────
-    if (pass.imageCap === 0) {
-      throw new ForbiddenException(
-        "Image generation requires PRO or ELITE plan",
-      );
-    }
-
-    // ── 3. Check pass not expired ─────────────────────────────────────────
-    if (new Date() > pass.endsAt) {
-      throw new ForbiddenException(
-        "Your pass has expired. Please renew to generate images.",
-      );
-    }
-
-    // ── 4. Check monthly quota ────────────────────────────────────────────
-    if (pass.imagesUsed >= pass.imageCap) {
-      throw new ForbiddenException(
-        `لقد استنفذت حصتك الشهرية من الصور (${pass.imageCap} صورة). تتجدد مع باقتك القادمة.`,
-      );
-    }
-
-    // ── 5. Call Imagen 4 ──────────────────────────────────────────────────
+    // 2. Call Imagen 4
     try {
       const response = await this.ai.models.generateImages({
         model: "imagen-4.0-generate-001",
@@ -67,7 +48,6 @@ export class ImageService {
           numberOfImages: 1,
           aspectRatio,
           outputMimeType: "image/jpeg",
-          //safetyFilterLevel: 'BLOCK_MEDIUM_AND_ABOVE',
         },
       });
 
@@ -76,19 +56,14 @@ export class ImageService {
         throw new BadRequestException("No image returned from API");
       }
 
-      // imageBytes is already a base64 string in the JS SDK
       const rawBytes = generatedImage.image.imageBytes;
       const base64 =
         typeof rawBytes === "string"
           ? rawBytes
           : Buffer.from(rawBytes as any).toString("base64");
 
-      // ── 6. Persist atomically ─────────────────────────────────────────
+      // 3. Persist + deduct credits atomically
       await Promise.all([
-        this.prisma.pass.update({
-          where: { userId },
-          data: { imagesUsed: { increment: 1 } },
-        }),
         this.prisma.generatedImage.create({
           data: {
             userId,
@@ -96,23 +71,21 @@ export class ImageService {
             model: "imagen-4.0-generate-001",
           },
         }),
-        this.prisma.usageLog.create({
-          data: {
-            userId,
-            type: "IMAGE",
-            model: "imagen-4.0-generate-001",
-            images: 1,
-          },
-        }),
+        this.billing.consume(
+          userId,
+          ActionType.IMAGE_GENERATION,
+          "imagen-4.0-generate-001",
+        ),
       ]);
+
+      const balance = await this.billing.getBalance(userId);
 
       return {
         base64,
         mimeType: "image/jpeg",
         prompt: prompt.trim(),
-        imagesUsed: pass.imagesUsed + 1,
-        imagesLimit: pass.imageCap,
-        remaining: pass.imageCap - (pass.imagesUsed + 1),
+        creditsUsed: canUse.cost,
+        creditsRemaining: balance,
       };
     } catch (err: any) {
       if (
@@ -127,27 +100,12 @@ export class ImageService {
   // ── Status ─────────────────────────────────────────────────────────────────
 
   async getStatus(userId: string) {
-    const pass = await this.prisma.pass.findUnique({ where: { userId } });
-
-    if (!pass) {
-      return {
-        plan: "FREE",
-        limit: 0,
-        used: 0,
-        remaining: 0,
-        hasAccess: false,
-      };
-    }
-
-    const expired = new Date() > pass.endsAt;
-
+    const status = await this.billing.getStatus(userId);
     return {
-      plan: pass.plan,
-      limit: pass.imageCap,
-      used: pass.imagesUsed,
-      remaining: expired ? 0 : Math.max(0, pass.imageCap - pass.imagesUsed),
-      hasAccess: pass.imageCap > 0 && !expired,
-      expiresAt: pass.endsAt,
+      plan: status.plan,
+      balance: status.balance,
+      hasAccess: status.features.includes("image_generation"),
+      creditCostPerImage: 10,
     };
   }
 
