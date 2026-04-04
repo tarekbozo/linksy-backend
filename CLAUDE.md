@@ -2,6 +2,32 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Structure Overview
+
+This project has two separate applications:
+
+1. Frontend
+
+- Framework: React / Next.js
+- Location: linksy-next16-front-end
+- Runs on: http://localhost:3000
+
+2. Backend
+
+- Framework: NestJS
+- Location: linksy-nest-back-end
+- Runs on: http://localhost:3001
+
+Architecture:
+
+- The frontend communicates with the backend using REST APIs.
+- Backend exposes endpoints consumed by the frontend.
+
+Key source folders:
+
+- Frontend: linksy-next16-front-end/src
+- Backend: linksy-nest-back-end/src
+
 ## Commands
 
 ```bash
@@ -58,6 +84,7 @@ Session management: max 5 sessions/user; oldest revoked on overflow; refresh rot
 ### Billing & Credits
 
 Three credit bucket types tracked in `UserCredit`: `SUBSCRIPTION`, `TOPUP`, `FREE_DAILY`.
+
 - Free daily: 10 credits/day, reset by `ensureFreeDailyCredit()` in `BillingService`
 - Orders (`Order` model) are created for plan upgrades and topup purchases; an admin confirms or rejects them
 - All credit movements are append-only in `CreditTransaction`
@@ -65,6 +92,7 @@ Three credit bucket types tracked in `UserCredit`: `SUBSCRIPTION`, `TOPUP`, `FRE
 ### AI Chat (`ChatModule`)
 
 Streaming responses via `POST /api/v1/chat/conversations/:id/stream`. Supported providers:
+
 - **Anthropic:** Claude Haiku 4.5, Claude Sonnet 4.6
 - **OpenAI:** GPT-4.1 Nano/Mini, GPT-4o, GPT-4o Mini
 - **Gemini:** Gemini 2.5 Flash
@@ -73,18 +101,18 @@ Each message deducts credits. File attachments (images, PDFs, code) are supporte
 
 ### Key Modules
 
-| Module | Path | Responsibility |
-|--------|------|----------------|
-| Auth | `src/auth/` | Magic links, OAuth, JWT, sessions, CSRF |
-| Users | `src/users/` | User CRUD, roles, agent order views |
-| Chat | `src/chat/` | Conversations, streaming AI messages |
-| Billing | `src/billing/` | Credits, subscriptions, topups, orders |
-| Image | `src/image/` | Image generation with credit deduction |
-| Voice | `src/voice/` | Voice transcription with credit deduction |
-| Waitlist | `src/waitlist/` | Waitlist join, referrals, email blasts |
-| Email | `src/email/` | Resend-based transactional email |
-| Audit | `src/audit/` | Non-blocking security event logging |
-| Prisma | `src/prisma/` | `@Global()` DB service, available everywhere |
+| Module   | Path            | Responsibility                               |
+| -------- | --------------- | -------------------------------------------- |
+| Auth     | `src/auth/`     | Magic links, OAuth, JWT, sessions, CSRF      |
+| Users    | `src/users/`    | User CRUD, roles, agent order views          |
+| Chat     | `src/chat/`     | Conversations, streaming AI messages         |
+| Billing  | `src/billing/`  | Credits, subscriptions, topups, orders       |
+| Image    | `src/image/`    | Image generation with credit deduction       |
+| Voice    | `src/voice/`    | Voice transcription with credit deduction    |
+| Waitlist | `src/waitlist/` | Waitlist join, referrals, email blasts       |
+| Email    | `src/email/`    | Resend-based transactional email             |
+| Audit    | `src/audit/`    | Non-blocking security event logging          |
+| Prisma   | `src/prisma/`   | `@Global()` DB service, available everywhere |
 
 ### Database
 
@@ -93,6 +121,7 @@ PostgreSQL via Prisma. Schema at `prisma/schema.prisma`. Core models: `User`, `S
 ### Environment Variables
 
 Copy `.env.example` to `.env`. Required vars:
+
 - `DATABASE_URL` — PostgreSQL connection string
 - `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` — long random secrets
 - `RESEND_API_KEY` + `EMAIL_FROM` — transactional email
