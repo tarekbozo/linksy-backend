@@ -18,7 +18,7 @@ export const PLAN_CONFIG: Record<
     monthlyImageCap: 0,
   },
   STUDENT: {
-    priceSYP: 10000,
+    priceSYP: 15000,
     credits: 300,
     durationDays: 30,
     features: [
@@ -27,11 +27,12 @@ export const PLAN_CONFIG: Record<
       "summarize",
       "explain",
       "voice_to_text",
+      "translate",
     ],
     monthlyImageCap: 0,
   },
   FREELANCER: {
-    priceSYP: 20000,
+    priceSYP: 30000,
     credits: 800,
     durationDays: 30,
     features: [
@@ -50,7 +51,7 @@ export const PLAN_CONFIG: Record<
     monthlyImageCap: 30, // 30 images/month for freelancer
   },
   CREATOR: {
-    priceSYP: 35000,
+    priceSYP: 50000,
     credits: 1500,
     durationDays: 30,
     features: [
@@ -69,16 +70,23 @@ export const PLAN_CONFIG: Record<
       "product_descriptions",
       "voice_generation",
     ],
-    monthlyImageCap: -1, // unlimited
+    monthlyImageCap: 100, // 100 images/month, tier-routed
   },
 };
 
 export const CREDIT_COST: Record<string, number> = {
   BASIC_CHAT: 1,
   ADVANCED_CHAT: 2,
-  IMAGE_GENERATION: 10,
+  IMAGE_GENERATION: 10, // fallback / legacy — new code uses IMAGE_CREDIT_COST
   VOICE_GENERATION: 2,
   VIDEO_GENERATION: 50,
+};
+
+// Tier-based image credit costs
+export const IMAGE_CREDIT_COST: Record<"HIGH" | "MEDIUM" | "LOW", number> = {
+  HIGH: 15,   // imagen-4.0-generate-001 (images 1–20)
+  MEDIUM: 10, // imagen-4.0-fast-generate-001 (images 21–70)
+  LOW: 5,     // fal.ai Flux (images 71–100)
 };
 
 export const BASIC_MODELS = ["gemini-2.5-flash"];

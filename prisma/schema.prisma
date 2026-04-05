@@ -227,12 +227,14 @@ model ChatMessage {
 // ============================================================
 
 model GeneratedImage {
-  id        String   @id @default(cuid())
-  userId    String
-  prompt    String
-  model     String   @default("imagen-4.0-generate-001")
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  userId     String
+  prompt     String
+  model      String   @default("imagen-4.0-generate-001")
+  tier       String   @default("HIGH")   // HIGH | MEDIUM | LOW
+  isOverride Boolean  @default(false)    // true = complex-prompt HQ override
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
 }

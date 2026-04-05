@@ -94,7 +94,7 @@ export class BillingService {
 
     if (!record) {
       record = await this.prisma.freeDailyCredit.create({
-        data: { userId, lastResetAt: todayUTC, usedToday: 0, dailyCap: 10 },
+        data: { userId, lastResetAt: todayUTC, usedToday: 0, dailyCap: PLAN_CONFIG[Plan.FREE].credits },
       });
     } else if (record.lastResetAt < todayUTC) {
       record = await this.prisma.freeDailyCredit.update({
@@ -154,11 +154,11 @@ export class BillingService {
       };
     }
 
-    // ── Freelancer monthly image cap (30/month, Creator = unlimited) ─────────
+    // ── Monthly image cap (FREELANCER=30, CREATOR=100, others=0) ─────────────
 
     if (
       action === ActionType.IMAGE_GENERATION &&
-      cfg.monthlyImageCap > 0 // -1 = unlimited, 0 = no access, >0 = capped
+      cfg.monthlyImageCap > 0
     ) {
       const startOfMonth = new Date();
       startOfMonth.setUTCDate(1);
@@ -176,7 +176,7 @@ export class BillingService {
         return {
           allowed: false,
           reason: "IMAGE_CAP",
-          message: `وصلت للحد الشهري (${cfg.monthlyImageCap} صورة). قم بالترقية إلى باقة المبدع للحصول على صور غير محدودة.`,
+          message: `لقد وصلت للحد الأقصى من الصور هذا الشهر (${cfg.monthlyImageCap} صورة).`,
           cost,
         };
       }
@@ -388,8 +388,15 @@ export class BillingService {
       },
     });
 
+    const usageType =
+      action === ActionType.IMAGE_GENERATION
+        ? "IMAGE"
+        : action === ActionType.VOICE_GENERATION
+          ? "VOICE"
+          : "CHAT";
+
     await this.prisma.usageLog.create({
-      data: { userId, type: "CHAT", credits },
+      data: { userId, type: usageType as any, credits },
     });
 
     return { creditsDeducted: credits, creditsRemaining: newBalance };
@@ -508,6 +515,15 @@ export class BillingService {
       );
 
       await this.prisma.$transaction([
+        // Expire any existing SUBSCRIPTION bucket so old plan credits don't stack
+        this.prisma.userCredit.updateMany({
+          where: {
+            userId: order.userId,
+            type: CreditType.SUBSCRIPTION,
+            remaining: { gt: 0 },
+          },
+          data: { remaining: 0, expiresAt: now },
+        }),
         this.prisma.order.update({
           where: { id: orderId },
           data: {
