@@ -1,5 +1,3 @@
-
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,9 +6,249 @@ datasource db {
   provider = "postgresql"
 }
 
-// ============================================================
-// ENUMS
-// ============================================================
+model User {
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  role               Role                @default(USER)
+  isActive           Boolean             @default(true)
+  onboarded          Boolean             @default(false)
+  accounts           Account[]
+  actorLogs          AuditLog[]          @relation("ActorAuditLogs")
+  auditLogs          AuditLog[]          @relation("UserAuditLogs")
+  chats              ChatMessage[]
+  conversations      Conversation[]
+  creditTransactions CreditTransaction[]
+  freeDailyCredit    FreeDailyCredit?
+  generatedImages    GeneratedImage[]
+  magicTokens        MagicToken[]
+  confirmedOrders    Order[]             @relation("ConfirmedByOrders")
+  orders             Order[]             @relation("UserOrders")
+  sessions           Session[]
+  usageLogs          UsageLog[]
+  creditBuckets      UserCredit[]
+  subscription       UserSubscription?
+
+  @@index([email])
+  @@index([role])
+}
+
+model MagicToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  userAgent  String?
+  ipAddress  String?
+  revokedAt  DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model Account {
+  id                String   @id @default(cuid())
+  userId            String
+  provider          String
+  providerAccountId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model WaitlistEntry {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  status       String   @default("PENDING")
+  source       String?
+  locale       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  referralCode String?  @unique
+  referredBy   String?
+}
+
+model Conversation {
+  id                 String              @id @default(cuid())
+  userId             String
+  title              String              @default("New conversation")
+  provider           AiProvider          @default(ANTHROPIC)
+  model              String              @default("claude-haiku-4-5-20251001")
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  messages           ChatMessage[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creditTransactions CreditTransaction[]
+
+  @@index([userId, updatedAt])
+}
+
+model ChatMessage {
+  id             String       @id @default(cuid())
+  userId         String?
+  role           String
+  content        String
+  model          String?
+  createdAt      DateTime     @default(now())
+  tokens         Int          @default(0)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User?        @relation(fields: [userId], references: [id])
+
+  @@index([conversationId, createdAt])
+}
+
+model GeneratedImage {
+  id         String   @id @default(cuid())
+  userId     String
+  prompt     String
+  model      String   @default("imagen-4.0-generate-001")
+  createdAt  DateTime @default(now())
+  isOverride Boolean  @default(false)
+  tier       String   @default("HIGH")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model UsageLog {
+  id        String    @id @default(cuid())
+  userId    String
+  type      UsageType
+  model     String?
+  tokens    Int       @default(0)
+  images    Int       @default(0)
+  createdAt DateTime  @default(now())
+  credits   Int       @default(0)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model UserCredit {
+  id           String              @id @default(cuid())
+  userId       String
+  type         CreditType
+  amount       Int
+  remaining    Int
+  expiresAt    DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  transactions CreditTransaction[]
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([userId, type])
+}
+
+model CreditTransaction {
+  id             String          @id @default(cuid())
+  userId         String
+  userCreditId   String?
+  type           TransactionType
+  action         ActionType
+  amount         Int
+  balanceAfter   Int
+  conversationId String?
+  metadata       Json?
+  createdAt      DateTime        @default(now())
+  conversation   Conversation?   @relation(fields: [conversationId], references: [id])
+  userCredit     UserCredit?     @relation(fields: [userCreditId], references: [id])
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userCreditId])
+  @@index([conversationId])
+}
+
+model UserSubscription {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  plan        Plan      @default(FREE)
+  activatedAt DateTime?
+  expiresAt   DateTime?
+  autoRenew   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TopUpPack {
+  id        String   @id @default(cuid())
+  nameAr    String
+  nameEn    String
+  priceSYP  Int
+  credits   Int
+  validDays Int      @default(90)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  userId      String
+  createdAt   DateTime    @default(now())
+  confirmedAt DateTime?
+  plan        Plan?
+  updatedAt   DateTime    @updatedAt
+  status      OrderStatus @default(PENDING)
+  confirmedBy String?
+  priceSYP    Int
+  topUpPackId String?
+  confirmer   User?       @relation("ConfirmedByOrders", fields: [confirmedBy], references: [id])
+  topUpPack   TopUpPack?  @relation(fields: [topUpPackId], references: [id])
+  user        User        @relation("UserOrders", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([topUpPackId])
+  @@index([confirmedBy])
+}
+
+model FreeDailyCredit {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  lastResetAt DateTime @default(now())
+  usedToday   Int      @default(0)
+  dailyCap    Int      @default(10)
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  userId    String?
+  actorId   String?
+  action    AuditAction
+  metadata  Json?
+  createdAt DateTime    @default(now())
+  actor     User?       @relation("ActorAuditLogs", fields: [actorId], references: [id])
+  user      User?       @relation("UserAuditLogs", fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+}
 
 enum Role {
   ADMIN
@@ -58,9 +296,9 @@ enum AuditAction {
   PASS_ACTIVATED
   PASS_CREATED
   ORDER_CONFIRMED
-  ORDER_REJECTED
   ROLE_CHANGED
   USER_DEACTIVATED
+  ORDER_REJECTED
   PLAN_ACTIVATED
   TOPUP_PURCHASED
   FREE_CREDITS_RESET
@@ -88,325 +326,4 @@ enum ActionType {
   FREE_DAILY_RESET
   REFUND
   STUDY
-}
-
-// ============================================================
-// USER
-// ============================================================
-
-model User {
-  id                 String               @id @default(uuid())
-  email              String               @unique
-  role               Role                 @default(USER)
-  isActive           Boolean              @default(true)
-  onboarded          Boolean              @default(false)
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-
-  accounts           Account[]
-  magicTokens        MagicToken[]
-  sessions           Session[]
-
-  conversations      Conversation[]
-  chats              ChatMessage[]
-  generatedImages    GeneratedImage[]
-
-  orders             Order[]              @relation("UserOrders")
-  confirmedOrders    Order[]              @relation("ConfirmedByOrders")
-
-  usageLogs          UsageLog[]
-  auditLogs          AuditLog[]           @relation("UserAuditLogs")
-  actorLogs          AuditLog[]           @relation("ActorAuditLogs")
-
-  creditBuckets      UserCredit[]
-  creditTransactions CreditTransaction[]
-  subscription       UserSubscription?
-  freeDailyCredit    FreeDailyCredit?
-
-  @@index([email])
-  @@index([role])
-}
-
-// ============================================================
-// AUTH / SESSION MODELS
-// ============================================================
-
-model MagicToken {
-  id        String    @id @default(cuid())
-  userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
-
-  @@index([userId, expiresAt])
-}
-
-model Session {
-  id         String    @id @default(cuid())
-  userId     String
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash  String    @unique
-  userAgent  String?
-  ipAddress  String?
-  revokedAt  DateTime?
-  expiresAt  DateTime
-  createdAt  DateTime  @default(now())
-  lastUsedAt DateTime  @default(now())
-
-  @@index([userId])
-  @@index([tokenHash])
-}
-
-model Account {
-  id                String   @id @default(cuid())
-  userId            String
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  provider          String
-  providerAccountId String
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  @@unique([provider, providerAccountId])
-  @@index([userId])
-}
-
-// ============================================================
-// WAITLIST
-// ============================================================
-
-model WaitlistEntry {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  status       String   @default("PENDING")
-  source       String?
-  locale       String?
-  referredBy   String?
-  referralCode String?  @unique
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-}
-
-// ============================================================
-// CONVERSATIONS / MESSAGES
-// ============================================================
-
-model Conversation {
-  id                 String              @id @default(cuid())
-  userId             String
-  title              String              @default("New conversation")
-  provider           AiProvider          @default(ANTHROPIC)
-  model              String              @default("claude-haiku-4-5-20251001")
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages           ChatMessage[]
-  creditTransactions CreditTransaction[] // back-relation for billing audit
-
-  @@index([userId, updatedAt])
-}
-
-model ChatMessage {
-  id             String       @id @default(cuid())
-  conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  userId         String?
-  role           String
-  content        String
-  model          String?
-  tokens         Int          @default(0)
-  createdAt      DateTime     @default(now())
-  user           User?        @relation(fields: [userId], references: [id])
-
-  @@index([conversationId, createdAt])
-}
-
-// ============================================================
-// GENERATED ASSETS / ANALYTICS
-// ============================================================
-
-model GeneratedImage {
-  id         String   @id @default(cuid())
-  userId     String
-  prompt     String
-  model      String   @default("imagen-4.0-generate-001")
-  tier       String   @default("HIGH")   // HIGH | MEDIUM | LOW
-  isOverride Boolean  @default(false)    // true = complex-prompt HQ override
-  createdAt  DateTime @default(now())
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, createdAt])
-}
-
-model UsageLog {
-  id        String    @id @default(cuid())
-  userId    String
-  type      UsageType
-  model     String?
-  tokens    Int       @default(0)
-  images    Int       @default(0)
-  credits   Int       @default(0) // credit cost logged per action
-  createdAt DateTime  @default(now())
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, createdAt])
-}
-
-// ============================================================
-// CREDIT BUCKETS
-// Each row = one credit bucket (subscription grant or top-up)
-// Consumption order: SUBSCRIPTION first, then TOPUP (by expiresAt ASC)
-// FREE_DAILY is managed via FreeDailyCredit — not stored here
-// ============================================================
-
-model UserCredit {
-  id           String              @id @default(cuid())
-  userId       String
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  type         CreditType
-  amount       Int                 // original grant
-  remaining    Int                 // current balance in this bucket
-  expiresAt    DateTime?           // null only if FREE_DAILY (edge case — prefer FreeDailyCredit)
-
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
-
-  transactions CreditTransaction[]
-
-  @@index([userId, expiresAt])
-  @@index([userId, type])
-}
-
-// ============================================================
-// TRANSACTION LOG — append-only audit trail
-// ============================================================
-
-model CreditTransaction {
-  id             String           @id @default(cuid())
-  userId         String
-  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  userCreditId   String?
-  userCredit     UserCredit?      @relation(fields: [userCreditId], references: [id], onDelete: SetNull)
-
-  type           TransactionType
-  action         ActionType
-  amount         Int              // always positive; direction = type field
-  balanceAfter   Int              // total across all buckets after this tx
-
-  conversationId String?
-  conversation   Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-
-  metadata       Json?            // internal: model used, image prompt, etc — never exposed to user
-  createdAt      DateTime         @default(now())
-
-  @@index([userId, createdAt])
-  @@index([userCreditId])
-  @@index([conversationId])
-}
-
-// ============================================================
-// SUBSCRIPTION — one active row per user
-// ============================================================
-
-model UserSubscription {
-  id          String    @id @default(cuid())
-  userId      String    @unique
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  plan        Plan      @default(FREE)
-  activatedAt DateTime?
-  expiresAt   DateTime? // null = FREE (no subscription expiry)
-  autoRenew   Boolean   @default(false)
-
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-}
-
-// ============================================================
-// TOP-UP PACK DEFINITIONS (catalogue — managed by admin)
-// ============================================================
-
-model TopUpPack {
-  id        String   @id @default(cuid())
-  nameAr    String
-  nameEn    String
-  priceSYP  Int
-  credits   Int
-  validDays Int      @default(90)
-  active    Boolean  @default(true)
-
-  orders    Order[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-// ============================================================
-// ORDERS — plan activations AND top-up purchases
-// Exactly one of `plan` or `topUpPackId` must be set
-// Agent sets status=CONFIRMED → triggers credit grant in billing service
-// ============================================================
-
-model Order {
-  id          String      @id @default(cuid())
-
-  userId      String
-  user        User        @relation("UserOrders", fields: [userId], references: [id], onDelete: Cascade)
-
-  plan        Plan?       // set if this is a plan order
-  topUpPackId String?     // set if this is a top-up order
-  topUpPack   TopUpPack?  @relation(fields: [topUpPackId], references: [id], onDelete: SetNull)
-
-  priceSYP    Int
-  status      OrderStatus @default(PENDING)
-
-  confirmedAt DateTime?
-  confirmedBy String?
-  confirmer   User?       @relation("ConfirmedByOrders", fields: [confirmedBy], references: [id], onDelete: SetNull)
-
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-
-  @@index([userId, status])
-  @@index([topUpPackId])
-  @@index([confirmedBy])
-}
-
-// ============================================================
-// FREE DAILY CREDIT STATE
-// Tracks today's usage to avoid double-reset
-// ============================================================
-
-model FreeDailyCredit {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  lastResetAt DateTime @default(now())
-  usedToday   Int      @default(0)
-  dailyCap    Int      @default(10)
-
-  updatedAt   DateTime @updatedAt
-}
-
-// ============================================================
-// AUDIT LOGS
-// ============================================================
-
-model AuditLog {
-  id        String      @id @default(cuid())
-  userId    String?
-  user      User?       @relation("UserAuditLogs", fields: [userId], references: [id], onDelete: SetNull)
-  actorId   String?
-  actor     User?       @relation("ActorAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
-  action    AuditAction
-  metadata  Json?
-  createdAt DateTime    @default(now())
-
-  @@index([userId, createdAt])
-  @@index([actorId, createdAt])
-  @@index([action, createdAt])
 }

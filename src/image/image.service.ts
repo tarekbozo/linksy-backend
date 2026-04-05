@@ -306,14 +306,7 @@ export class ImageService {
     const cfg = PLAN_CONFIG[plan];
     const hasAccess = billingStatus.features.includes("image_generation");
 
-    const monthStart = this.getMonthStart();
-    const imagesThisMonth = await this.prisma.generatedImage.count({
-      where: { userId, createdAt: { gte: monthStart } },
-    });
-    const overridesUsed = await this.prisma.generatedImage.count({
-      where: { userId, isOverride: true, createdAt: { gte: monthStart } },
-    });
-
+    // Early return for plans without image access — no DB queries needed.
     if (!hasAccess) {
       return {
         plan,
@@ -321,11 +314,20 @@ export class ImageService {
         limit: 0,
         used: 0,
         remaining: 0,
+        blockedBy: null as null,
         currentTier: null,
         creditCostPerImage: 0,
         overridesRemaining: 0,
       };
     }
+
+    const monthStart = this.getMonthStart();
+    const imagesThisMonth = await this.prisma.generatedImage.count({
+      where: { userId, createdAt: { gte: monthStart } },
+    });
+    const overridesUsed = await this.prisma.generatedImage.count({
+      where: { userId, isOverride: true, createdAt: { gte: monthStart } },
+    });
 
     const limit = cfg.monthlyImageCap; // 30 (FREELANCER) or 100 (CREATOR)
     const used = Math.min(imagesThisMonth, limit);
