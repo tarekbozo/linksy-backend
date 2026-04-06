@@ -103,7 +103,7 @@ export class ImageService {
       await this.prisma.$transaction(async (tx) => {
         // Lock is scoped to this transaction and released on commit/rollback.
         // Namespace 42 avoids clashing with any other advisory locks in the app.
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(42, hashtext(${userId}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(42, hashtext(${userId}))`;
 
         const imagesThisMonth = await tx.generatedImage.count({
           where: { userId, createdAt: { gte: monthStart } },
