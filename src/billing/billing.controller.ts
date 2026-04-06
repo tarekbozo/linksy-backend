@@ -1,22 +1,11 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-} from "@nestjs/common";
-import { Plan, Role, UsageType } from "@prisma/client";
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Plan, Role } from "@prisma/client";
 import { BillingService } from "./billing.service";
 import { SelectPlanDto } from "./dto/select-plan.dto";
-import { UsageCheckDto } from "./dto/usage.dto";
 import { ConfirmOrderDto } from "./dto/confirm-order.dto";
 import { AuthUser, CurrentUser, Roles } from "src/auth/decorators";
 import { SkipThrottle } from "@nestjs/throttler";
-
-// Use your existing decorators/guards.
-// In your project, JwtAuthGuard is global, so these routes are already protected.
+import { PurchaseTopUpDto } from "./dto/purchase-topup.dto";
 
 @Controller("billing")
 export class BillingController {
@@ -26,35 +15,40 @@ export class BillingController {
   listPlans() {
     return this.billing.listPlans();
   }
-  @SkipThrottle()
-  @Get("pass")
-  myPass(@CurrentUser() user: AuthUser) {
-    return this.billing.getMyPass(user.id);
+
+  @Get("topups")
+  listTopUps() {
+    return this.billing.listTopUpPacks();
   }
 
   @SkipThrottle()
   @Get("status")
   status(@CurrentUser() user: AuthUser) {
-    return this.billing.getUsageStatus(user.id);
+    return this.billing.getStatus(user.id);
   }
 
-  @Patch("select")
+  @SkipThrottle()
+  @Get("balance")
+  balance(@CurrentUser() user: AuthUser) {
+    return this.billing.getBalance(user.id);
+  }
+
+  @Post("select")
   select(@CurrentUser() user: AuthUser, @Body() dto: SelectPlanDto) {
     return this.billing.selectPlan(user.id, dto.plan as Plan);
   }
+
+  @Post("topup")
+  purchaseTopUp(@CurrentUser() user: AuthUser, @Body() dto: PurchaseTopUpDto) {
+    return this.billing.purchaseTopUp(user.id, dto.topUpPackId);
+  }
+
   @Get("orders/:id")
   @Roles(Role.ADMIN, Role.AGENT)
   getOrder(@Param("id") id: string) {
     return this.billing.getOrderById(id);
   }
-  @SkipThrottle()
-  @Get("activity")
-  getActivity(@CurrentUser() user: AuthUser, @Query("take") take = "10") {
-    return this.billing.getActivity(user.id, +take);
-  }
-  /**
-   * Confirm an order (agent/admin flow).
-   */
+
   @Post("orders/:id/confirm")
   @Roles(Role.ADMIN, Role.AGENT)
   confirmOrder(
@@ -65,30 +59,15 @@ export class BillingController {
     return this.billing.confirmOrder(user.id, id, dto.reference);
   }
 
-  /**
-   * Check usage allowance without consuming.
-   */
-  @Post("usage/check")
-  async check(@CurrentUser() user: AuthUser, @Body() dto: UsageCheckDto) {
-    return this.billing.canConsume(
-      user.id,
-      dto.type as UsageType,
-      dto.tokens,
-      dto.images ?? 0,
-    );
+  @Post("orders/:id/reject")
+  @Roles(Role.ADMIN, Role.AGENT)
+  rejectOrder(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.billing.rejectOrder(user.id, id);
   }
 
-  /**
-   * Consume usage (write usage log + increment counters).
-   */
-  @Post("usage/consume")
-  async consume(@CurrentUser() user: AuthUser, @Body() dto: UsageCheckDto) {
-    return this.billing.consume(
-      user.id,
-      dto.type as UsageType,
-      dto.tokens,
-      dto.images ?? 0,
-      dto.model,
-    );
+  @SkipThrottle()
+  @Get("activity")
+  getActivity(@CurrentUser() user: AuthUser, @Query("take") take = "50") {
+    return this.billing.getActivity(user.id, +take);
   }
 }

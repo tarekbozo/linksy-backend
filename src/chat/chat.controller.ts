@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -65,6 +66,7 @@ export class ChatController {
     @Param("id") id: string,
     @Body() body: StreamMessageDto,
     @Res() res: Response,
+    @Headers("x-study-session") studySession?: string,
   ) {
     await this.chat.streamChat(
       user.id,
@@ -73,6 +75,7 @@ export class ChatController {
       res,
       body.file,
       body.modelId,
+      studySession === "true",
     );
   }
 }
