@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -60,6 +61,13 @@ export class UsersController {
     @CurrentUser() actor: AuthUser,
   ) {
     return this.users.setActive(id, dto.isActive, actor.id);
+  }
+
+  // ─── ADMIN: broadcast announcement email to all active users ────────────
+  @Post("admin/broadcast-announcement")
+  @Roles(Role.ADMIN)
+  broadcastAnnouncement() {
+    return this.users.broadcastAnnouncement();
   }
 
   // ─── AGENT + ADMIN: get order by id (to confirm) ────────────────────────

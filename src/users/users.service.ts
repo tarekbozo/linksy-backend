@@ -6,12 +6,14 @@ import {
 import { AuditAction, OrderStatus, Role } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { EmailService } from "../email/email.service";
 
 @Injectable()
 export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly email: EmailService,
   ) {}
 
   // ─── Admin: list all users ───────────────────────────────────────────────
@@ -150,6 +152,18 @@ export class UsersService {
       orderBy: { createdAt: "desc" },
       take: 50,
     });
+  }
+
+  // ─── Admin: broadcast announcement to all active users ──────────────────
+  async broadcastAnnouncement(): Promise<{ sent: number; failed: number; total: number }> {
+    const users = await this.prisma.user.findMany({
+      where: { isActive: true },
+      select: { email: true },
+    });
+
+    const emails = users.map((u) => u.email);
+    const result = await this.email.sendAnnouncementBlast(emails);
+    return { ...result, total: emails.length };
   }
 
   // ─── Agent: stats ────────────────────────────────────────────────────────

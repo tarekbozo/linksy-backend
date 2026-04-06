@@ -19,6 +19,7 @@ import {
 } from "src/waitlist/waitlist-email.template";
 import { waitlistGoLiveEmailHtml } from "src/waitlist/Waitlist-golive-email";
 import { waitlistLaunchEmailHtml } from "src/waitlist/waitlist-launch-email.template";
+import { announcementEmailHtml } from "./announcement-email.template";
 
 @Injectable()
 export class EmailService {
@@ -92,6 +93,40 @@ export class EmailService {
     if (error) {
       this.logger.error(`Broadcast failed for ${toEmail}`, error);
     }
+  }
+
+  /**
+   * Sends the launch announcement email to every address in the list.
+   * Rate-limited to ~2 req/sec (500 ms gap) to stay within Resend free-tier limits.
+   * Returns a summary { sent, failed }.
+   */
+  async sendAnnouncementBlast(
+    emails: string[],
+  ): Promise<{ sent: number; failed: number }> {
+    const subject = "🚀 LinkSy — ميزات جديدة وأسعار محدّثة + عرض الإطلاق";
+    const html = announcementEmailHtml();
+    let sent = 0;
+    let failed = 0;
+
+    for (const email of emails) {
+      const { error } = await this.resend.emails.send({
+        from: this.from(),
+        to: [email],
+        subject,
+        html,
+      });
+      if (error) {
+        this.logger.error(`Announcement failed for ${email}`, error);
+        failed++;
+      } else {
+        sent++;
+      }
+      // ~2 emails/sec — respect Resend rate limit on free/starter plans
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    this.logger.log(`Announcement blast done — sent: ${sent}, failed: ${failed}`);
+    return { sent, failed };
   }
 
   async sendWaitlistLaunch(toEmail: string, refCode: string): Promise<void> {
