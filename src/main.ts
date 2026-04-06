@@ -51,7 +51,7 @@ async function bootstrap() {
       "Content-Type",
       "Authorization",
       "X-CSRF-Token",
-      "x-study-session",
+      "x-internal-session",
     ],
   });
 

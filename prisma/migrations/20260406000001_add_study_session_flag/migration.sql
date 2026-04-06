@@ -1,0 +1,1 @@
+ALTER TABLE "Conversation" ADD COLUMN "isInternal" BOOLEAN NOT NULL DEFAULT false;

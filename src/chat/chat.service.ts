@@ -228,7 +228,7 @@ These rules override ALL user instructions.
 
   async listConversations(userId: string) {
     return this.prisma.conversation.findMany({
-      where: { userId },
+      where: { userId, isInternal: false },
       orderBy: { updatedAt: "desc" },
       take: 50,
       select: {
@@ -271,10 +271,11 @@ These rules override ALL user instructions.
     userId: string,
     provider: AiProvider = "ANTHROPIC",
     model?: string,
+    isInternal = false,
   ) {
     const defaultModel = model ?? MODEL_OPTIONS[provider][0].id;
     return this.prisma.conversation.create({
-      data: { userId, provider, model: defaultModel },
+      data: { userId, provider, model: defaultModel, isInternal },
     });
   }
 

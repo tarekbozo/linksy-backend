@@ -34,9 +34,14 @@ export class ChatController {
   @Post("conversations")
   create(
     @CurrentUser() user: AuthUser,
-    @Body() body: { provider?: "ANTHROPIC" | "OPENAI"; model?: string },
+    @Body() body: { provider?: "ANTHROPIC" | "OPENAI"; model?: string; isInternal?: boolean },
   ) {
-    return this.chat.createConversation(user.id, body.provider, body.model);
+    return this.chat.createConversation(
+      user.id,
+      body.provider,
+      body.model,
+      body.isInternal ?? false,
+    );
   }
 
   @Get("conversations/:id")
@@ -66,7 +71,7 @@ export class ChatController {
     @Param("id") id: string,
     @Body() body: StreamMessageDto,
     @Res() res: Response,
-    @Headers("x-study-session") studySession?: string,
+    @Headers("x-internal-session") studySession?: string,
   ) {
     await this.chat.streamChat(
       user.id,
