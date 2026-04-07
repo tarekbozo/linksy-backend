@@ -2,7 +2,6 @@ import type { CookieOptions, Response } from "express";
 
 const isProd = process.env.NODE_ENV === "production";
 const cookieDomain = process.env.COOKIE_DOMAIN || undefined;
-const authCookiePath = process.env.AUTH_COOKIE_PATH || "/api/v1/auth";
 
 export const ACCESS_COOKIE_NAME = "access_token";
 export const REFRESH_COOKIE_NAME = "refresh_token";
@@ -25,7 +24,7 @@ export function buildRefreshCookieOptions(): CookieOptions {
     httpOnly: true,
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
-    path: authCookiePath,
+    path: "/",
     maxAge: 30 * 24 * 60 * 60 * 1000,
     domain: cookieDomain,
   };
@@ -54,7 +53,7 @@ export function setAuthCookies(
 export function clearAuthCookies(res: Response) {
   res.clearCookie(ACCESS_COOKIE_NAME, { path: "/", domain: cookieDomain });
   res.clearCookie(REFRESH_COOKIE_NAME, {
-    path: authCookiePath,
+    path: "/",
     domain: cookieDomain,
   });
 }
