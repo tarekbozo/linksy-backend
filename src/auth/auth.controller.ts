@@ -98,7 +98,7 @@ export class AuthController {
       redirectUrl = `${webUrl}/agent-portal`;
     } else {
       redirectUrl = result.user.onboarded
-        ? `${webUrl}/dashboard/ai-studio`
+        ? `${webUrl}/`
         : `${webUrl}/onboarding`;
     }
     return res.redirect(redirectUrl);
@@ -123,7 +123,7 @@ export class AuthController {
     issueCsrfToken(res);
     const webUrl = process.env.WEB_URL ?? "http://localhost:3000";
     const redirectUrl = result.user.onboarded
-      ? `${webUrl}/dashboard/ai-studio`
+      ? `${webUrl}/`
       : `${webUrl}/onboarding`;
     return res.redirect(redirectUrl);
   }
