@@ -217,6 +217,7 @@ model Order {
   confirmedBy String?
   priceSYP    Int
   topUpPackId String?
+  settledAt   DateTime?
   confirmer   User?       @relation("ConfirmedByOrders", fields: [confirmedBy], references: [id])
   topUpPack   TopUpPack?  @relation(fields: [topUpPackId], references: [id])
   user        User        @relation("UserOrders", fields: [userId], references: [id], onDelete: Cascade)
@@ -224,6 +225,7 @@ model Order {
   @@index([userId, status])
   @@index([topUpPackId])
   @@index([confirmedBy])
+  @@index([settledAt])
 }
 
 model FreeDailyCredit {

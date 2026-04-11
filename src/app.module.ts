@@ -26,6 +26,7 @@ import { ImageModule } from "./image/image.module";
 import { ContactController } from "./contact/contact.controller";
 import { VoiceModule } from "./voice/voice.module";
 import { StudyModule } from "./study/study.module";
+import { AdminModule } from "./admin/admin.module";
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { StudyModule } from "./study/study.module";
     ImageModule,
     VoiceModule,
     StudyModule,
+    AdminModule,
   ],
   controllers: [HealthController, MeController, ContactController],
   providers: [

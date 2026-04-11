@@ -45,8 +45,8 @@ export class BillingController {
 
   @Get("orders/:id")
   @Roles(Role.ADMIN, Role.AGENT)
-  getOrder(@Param("id") id: string) {
-    return this.billing.getOrderById(id);
+  getOrder(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.billing.getOrderById(id, user.role);
   }
 
   @Post("orders/:id/confirm")

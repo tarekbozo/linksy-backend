@@ -646,16 +646,48 @@ export class BillingService {
 
   // ── getOrderById ──────────────────────────────────────────────────────────
 
-  async getOrderById(orderId: string) {
+  async getOrderById(orderId: string, actorRole: import("@prisma/client").Role) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        user: { select: { id: true, email: true } },
+        user: { select: { id: true, email: true, createdAt: true } },
         topUpPack: true,
+        confirmer: { select: { id: true, email: true } },
       },
     });
     if (!order) throw new NotFoundException("Order not found");
-    return order;
+
+    const confirmedOrdersCount = await this.prisma.order.count({
+      where: { userId: order.userId, status: OrderStatus.CONFIRMED },
+    });
+
+    const grantedCredits =
+      order.plan != null
+        ? (PLAN_CONFIG[order.plan]?.credits ?? null)
+        : (order.topUpPack?.credits ?? null);
+
+    let activeUntil: string | null = null;
+    if (order.confirmedAt) {
+      const days =
+        order.plan != null
+          ? (PLAN_CONFIG[order.plan]?.durationDays ?? 30)
+          : (order.topUpPack?.validDays ?? 90);
+      const d = new Date(order.confirmedAt);
+      d.setDate(d.getDate() + days);
+      activeUntil = d.toISOString();
+    }
+
+    return {
+      ...order,
+      user: {
+        ...order.user,
+        confirmedOrdersCount,
+      },
+      grantedCredits,
+      activeUntil,
+      // Strip confirmer identity from non-admin agents — not just UI-hidden
+      confirmer: actorRole === "ADMIN" ? order.confirmer : undefined,
+    };
   }
 
   // ── listTopUpPacks ────────────────────────────────────────────────────────
