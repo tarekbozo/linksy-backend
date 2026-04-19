@@ -1,4 +1,11 @@
-import { Body, Controller, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Post,
+  UploadedFile,
+  UseInterceptors,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthUser, CurrentUser } from "../auth/decorators";
 import { StudyActionDto } from "./dto/study-action.dto";
 import { StudyService } from "./study.service";
@@ -15,5 +22,14 @@ export class StudyController {
       dto.textLength,
       dto.audioDurationSeconds,
     );
+  }
+
+  @Post("extract")
+  @UseInterceptors(FileInterceptor("file"))
+  extract(
+    @CurrentUser() _user: AuthUser,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.study.extractText(file);
   }
 }

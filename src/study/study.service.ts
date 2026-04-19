@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable } from "@nestjs/common";
 import { ActionType } from "@prisma/client";
 import { BillingService } from "../billing/billing.service";
 import { PLAN_CONFIG } from "../billing/billing.plans";
@@ -10,6 +10,14 @@ import {
 @Injectable()
 export class StudyService {
   constructor(private readonly billing: BillingService) {}
+
+  async extractText(file: Express.Multer.File): Promise<{ text: string }> {
+    if (!file) throw new BadRequestException("لم يتم رفع أي ملف");
+
+    const { extractText } = await import("unpdf");
+    const result = await extractText(new Uint8Array(file.buffer), { mergePages: true });
+    return { text: result.text };
+  }
 
   async processAction(
     userId: string,
